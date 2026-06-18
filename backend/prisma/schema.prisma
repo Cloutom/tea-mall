@@ -1,0 +1,630 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 최고 관리자
+model Admin {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("admins")
+}
+
+// 판매자 계정
+model Seller {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  password         String?
+  name             String
+  phone            String?
+  profileImageUrl  String?
+
+  // 사업자 정보
+  businessNumber   String?   @unique
+  businessName     String?
+  businessOwner    String?
+  businessAddress  String?
+  businessType     String?
+  businessCategory String?
+  businessImageUrl String?
+  businessVerified Boolean   @default(false)
+  businessVerifiedAt DateTime?
+
+  status           SellerStatus @default(PENDING)
+  rejectionReason  String?
+  approvedAt       DateTime?
+
+  isActive         Boolean   @default(true)
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  store            Store?
+  oauthAccounts    OAuthAccount[]
+  notifications    Notification[]
+
+  @@map("sellers")
+}
+
+enum SellerStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// OAuth 소셜 로그인
+model OAuthAccount {
+  id         String   @id @default(cuid())
+  provider   String   // kakao | google | naver
+  providerId String
+  sellerId   String
+  seller     Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([provider, providerId])
+  @@map("oauth_accounts")
+}
+
+// 판매자 스토어 (각 판매자당 1개)
+model Store {
+  id               String    @id @default(cuid())
+  sellerId         String    @unique
+  seller           Seller    @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  name             String
+  slug             String    @unique  // URL용 슬러그
+  description      String?
+  logoUrl          String?
+  bannerUrl        String?
+  profileImageUrl  String?
+
+  // 테마 커스터마이징
+  themeColor       String    @default("#2D6A4F")    // 메인 컬러
+  accentColor      String    @default("#D4A017")    // 포인트 컬러
+  backgroundColor  String    @default("#FAFAFA")    // 배경색
+  fontFamily       String    @default("Noto Sans KR")
+  layoutType       String    @default("grid")       // grid | list | magazine
+  bannerType       String    @default("image")      // image | video | slideshow
+
+  // 운영 정보
+  isOpen           Boolean   @default(true)
+  openMessage      String?   // 영업중 메시지
+  closedMessage    String?   // 휴무 메시지
+  shippingPolicy   String?
+  returnPolicy     String?
+  minOrderAmount   Float?
+
+  // 배송비 설정
+  shippingFee           Float    @default(3000)   // 기본 배송비
+  freeShippingThreshold Float?                     // 무료배송 기준금액 (null = 무료배송 없음)
+  shippingPolicies      Json?                      // [{"region":"제주","fee":3000},{"region":"도서산간","fee":5000}]
+
+  // SNS 링크
+  instagramUrl     String?
+  naverBlogUrl     String?
+  youtubeUrl       String?
+
+  totalViews       Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  products         Product[]
+  orders           Order[]
+  banners          StoreBanner[]
+  reviews          Review[]
+  popupDisplayMode String    @default("slideshow") // individual | slideshow
+  popups           StorePopup[]
+  courierAccounts  CourierAccount[]
+  storeCategories  StoreCategory[]
+  qnas             StoreQnA[]
+  chatbotFaqs      ChatbotFaq[]
+
+  @@map("stores")
+}
+
+// 스토어 배너 슬라이드
+model StoreBanner {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  imageUrl  String
+  linkUrl   String?
+  title     String?
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([storeId])
+  @@map("store_banners")
+}
+
+// 상품 카테고리 (차 관련)
+model Category {
+  id          String    @id @default(cuid())
+  name        String
+  nameEn      String?
+  icon        String?
+  description String?
+  order       Int       @default(0)
+  isActive    Boolean   @default(true)
+  parentId    String?
+  parent      Category? @relation("CategoryTree", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryTree")
+  products    Product[]
+  createdAt   DateTime  @default(now())
+
+  @@map("categories")
+}
+
+// 상품
+model Product {
+  id          String    @id @default(cuid())
+  storeId     String
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  name        String
+  description String?
+  detailHtml  String?   // 상세 설명 (리치에디터)
+  price       Float
+  originalPrice Float?  // 정가 (할인 전)
+  discountRate Int?     // 할인율 (%)
+
+  stock       Int       @default(0)
+  unit        String    @default("개")  // 개, g, ml, 박스 등
+  weight      Float?    // 무게 (g)
+
+  images      String[]  // S3 URL 배열
+  thumbnail   String?
+
+  // 차 전용 속성 — 기본
+  teaOrigin        String?   // 원산지 (지역)
+  teaType          String?   // 녹차, 홍차, 백차, 허브, 블렌딩 등
+  caffeineLevel    String?   // high/medium/low/none
+  brewingTemp      String?   // 추천 우리기 온도
+  brewingTime      String?   // 우리는 시간
+  harvestSeason    String?   // 수확시기 (우전/세작/중작/대작/가을)
+  processingMethod String?   // 가공방법 (덖음/증제/산화/발효 등)
+  liquidColor      String?   // 수색 (황금/노란/연두/갈색/붉은/진갈색)
+  body             String?   // 바디감 (light/medium/full)
+  aroma            String?   // 향 특성 comma-separated
+
+  // 맛 프로필 (0~5 단계)
+  flavorBitter     Int?      // 쓴맛
+  flavorSweet      Int?      // 단맛
+  flavorAstringent Int?      // 떫은맛
+  flavorSavory     Int?      // 구수한맛
+  flavorFloral     Int?      // 꽃향/화사함
+
+  // 추천 상황
+  recommendedTime  String?   // comma-separated: 아침/오후/저녁/명상/식후
+
+  // 기타 차 종류 직접 입력
+  teaTypeCustom    String?
+
+  // 할인 기간
+  discountStartAt  DateTime?
+  discountEndAt    DateTime?
+
+  // 스토어 전용 카테고리
+  storeCategoryId  String?
+  storeCategory    StoreCategory? @relation(fields: [storeCategoryId], references: [id], onDelete: SetNull)
+
+  tags        String[]
+  isActive    Boolean   @default(true)
+  isFeatured  Boolean   @default(false)
+  isSignature Boolean   @default(false) // 시그니처 메뉴
+
+  totalViews     Int    @default(0)
+  totalSales     Int    @default(0)
+  totalRevenue   Float  @default(0)
+
+  newBadgeDays   Int    @default(0)   // 신상품 표기 기간 (일), 0=미사용
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  orderItems     OrderItem[]
+  impressions    ProductImpression[]
+  reviews        Review[]
+
+  @@index([storeId, isActive])
+  @@index([categoryId])
+  @@index([storeCategoryId])
+  @@map("products")
+}
+
+// 상품 노출/조회 기록
+model ProductImpression {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  source     String?  // search | home | category | store
+  userAgent  String?
+  ip         String?
+  sessionId  String?
+  viewedAt   DateTime @default(now())
+
+  @@index([productId])
+  @@map("product_impressions")
+}
+
+// 주문
+model Order {
+  id            String      @id @default(cuid())
+  orderNumber   String      @unique  // 주문번호 (표시용)
+  storeId       String
+  store         Store       @relation(fields: [storeId], references: [id])
+
+  // 구매자 정보 (회원 or 비회원)
+  consumerId    String?
+  consumer      Consumer? @relation(fields: [consumerId], references: [id], onDelete: SetNull)
+  buyerName     String
+  buyerEmail    String
+  buyerPhone    String
+
+  // 배송 정보
+  recipientName    String
+  recipientPhone   String
+  postalCode       String
+  address          String
+  addressDetail    String?
+  deliveryMemo     String?
+
+  status           OrderStatus @default(PENDING)
+
+  // 결제 정보
+  totalAmount      Float
+  shippingFee      Float    @default(0)
+  discountAmount   Float    @default(0)
+  finalAmount      Float
+  paymentMethod    String?  // toss | kakao | card | bank
+  paymentId        String?  // PG사 결제 ID
+  paidAt           DateTime?
+
+  // 배송 정보
+  trackingNumber   String?
+  courier          String?
+  shippedAt        DateTime?
+  deliveredAt      DateTime?
+
+  cancelReason     String?
+  cancelledAt      DateTime?
+  refundAmount     Float?
+  refundedAt       DateTime?
+
+  memo             String?   // 판매자 메모
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  items            OrderItem[]
+  reviews          Review[]
+
+  @@index([consumerId])
+  @@index([storeId, status])
+  @@index([storeId, createdAt(sort: Desc)])
+  @@map("orders")
+}
+
+
+enum OrderStatus {
+  PENDING       // 주문 대기
+  CONFIRMED     // 주문 확인
+  PREPARING     // 준비중
+  SHIPPING      // 배송중
+  DELIVERED     // 배송 완료
+  CANCELLED     // 취소
+  REFUND_REQ    // 환불 요청
+  REFUNDED      // 환불 완료
+}
+
+// 주문 상품
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+
+  productName String   // 주문 시점 상품명 스냅샷
+  productImage String? // 주문 시점 이미지 스냅샷
+  quantity    Int
+  unitPrice   Float
+  totalPrice  Float
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// 리뷰
+model Review {
+  id         String   @id @default(cuid())
+  storeId    String
+  store      Store    @relation(fields: [storeId], references: [id])
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id])
+  consumerId String?
+  consumer   Consumer? @relation(fields: [consumerId], references: [id], onDelete: SetNull)
+
+  buyerName  String
+  rating     Int      // 1~5
+  content    String?
+  images     String[]
+  isVisible  Boolean  @default(true)
+  sellerReply String?
+  repliedAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([storeId, createdAt(sort: Desc)])
+  @@index([productId])
+  @@index([consumerId])
+  @@map("reviews")
+}
+
+// 정산
+model Settlement {
+  id            String   @id @default(cuid())
+  storeId       String
+  period        String   // YYYY-MM
+  totalSales    Float    @default(0)
+  platformFee   Float    @default(0)   // 플랫폼 수수료 (%)
+  paymentFee    Float    @default(0)   // 결제 수수료
+  netAmount     Float    @default(0)   // 정산 금액
+  status        String   @default("pending")  // pending | completed
+  settledAt     DateTime?
+  bankAccount   String?
+  bankName      String?
+  accountHolder String?
+  createdAt     DateTime @default(now())
+
+  @@map("settlements")
+}
+
+// 알림
+model Notification {
+  id        String   @id @default(cuid())
+  sellerId  String
+  seller    Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  type      String   // order | review | settlement | system
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  @@index([sellerId, isRead])
+  @@index([sellerId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+// 스토어 팝업 (복수 지원)
+model StorePopup {
+  id          String    @id @default(cuid())
+  storeId     String
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  imageUrl    String?
+  linkUrl     String?
+  hasLink     Boolean   @default(false)
+  width       Int       @default(400)
+  height      Int       @default(500)
+  startAt     DateTime
+  endAt       DateTime
+  isActive    Boolean   @default(true)
+  closeType   String    @default("close_only")  // close_only | hide_week
+  order       Int       @default(0)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("store_popups")
+}
+
+// 택배사 계정
+model CourierAccount {
+  id                  String   @id @default(cuid())
+  storeId             String
+  store               Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  courierCode         String   // CJ | HANJIN | LOTTE | LOGEN | EPOST | KDEXP | CVSNET | CHUNILPS
+  courierName         String   // 표시 이름 (예: CJ대한통운)
+  accountId           String?  // 택배사 계약번호 / 계정ID
+  clientKey           String?  // API 클라이언트 키 (for open API)
+  senderName          String   // 발송인 이름
+  senderPhone         String   // 발송인 연락처
+  senderZipCode       String?
+  senderAddress       String   // 발송인 주소
+  senderAddressDetail String?
+  isDefault           Boolean  @default(false)
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("courier_accounts")
+}
+
+// 스토어 전용 카테고리
+model StoreCategory {
+  id        String    @id @default(cuid())
+  storeId   String
+  store     Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name      String
+  icon      String?
+  order     Int       @default(0)
+  isActive  Boolean   @default(true)
+  products  Product[]
+  createdAt DateTime  @default(now())
+
+  @@index([storeId, isActive])
+  @@map("store_categories")
+}
+
+// 리프레시 토큰
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  sellerId  String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+// 소비자(구매자) 계정
+model Consumer {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  password        String
+  name            String
+  phone           String?
+
+  isActive        Boolean   @default(true)
+  lastLoginAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // 이메일 인증
+  emailVerified           Boolean   @default(false)
+  emailVerifyToken        String?
+  emailVerifyTokenExpiry  DateTime?
+
+  // 임시 WebAuthn 챌린지 저장
+  webAuthnChallenge       String?
+  webAuthnChallengeExpiry DateTime?
+
+  orders          Order[]
+  refreshTokens   ConsumerRefreshToken[]
+  addresses       ConsumerAddress[]
+  billingKeys     ConsumerBillingKey[]
+  webAuthnCreds   WebAuthnCredential[]
+  oauthAccounts   ConsumerOAuthAccount[]
+  reviews         Review[]
+  qnas            StoreQnA[]
+
+  @@map("consumers")
+}
+
+// 소비자 OAuth 소셜 로그인
+model ConsumerOAuthAccount {
+  id         String   @id @default(cuid())
+  provider   String   // kakao | google | naver
+  providerId String
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([provider, providerId])
+  @@map("consumer_oauth_accounts")
+}
+
+model ConsumerAddress {
+  id             String   @id @default(cuid())
+  consumerId     String
+  consumer       Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  label          String   @default("집")   // 집, 회사, 기타
+  recipientName  String
+  recipientPhone String
+  zipCode        String
+  address        String
+  addressDetail  String?
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([consumerId])
+  @@map("consumer_addresses")
+}
+
+model ConsumerBillingKey {
+  id               String   @id @default(cuid())
+  consumerId       String
+  consumer         Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  billingKey       String   @unique
+  customerKey      String
+  cardCompany      String?
+  cardNumber       String?  // 마스킹된 카드번호
+  isDefault        Boolean  @default(false)
+  biometricEnabled Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  @@index([consumerId])
+  @@map("consumer_billing_keys")
+}
+
+model WebAuthnCredential {
+  id           String   @id @default(cuid())
+  consumerId   String
+  consumer     Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  credentialId String   @unique
+  publicKey    String   // base64 encoded COSE public key
+  counter      Int      @default(0)
+  transports   String?  // JSON array
+  name         String?  // 디바이스 이름
+  createdAt    DateTime @default(now())
+
+  @@index([consumerId])
+  @@map("webauthn_credentials")
+}
+
+model ConsumerRefreshToken {
+  id         String   @id @default(cuid())
+  token      String   @unique
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([consumerId])
+  @@map("consumer_refresh_tokens")
+}
+
+// 스토어 QnA
+model StoreQnA {
+  id          String    @id @default(cuid())
+  storeId     String
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  consumerId  String?
+  consumer    Consumer? @relation(fields: [consumerId], references: [id], onDelete: SetNull)
+
+  buyerName   String
+  question    String
+  answer      String?
+  isPrivate   Boolean   @default(false)
+  isAnswered  Boolean   @default(false)
+  answeredAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([storeId, createdAt(sort: Desc)])
+  @@index([consumerId])
+  @@map("store_qnas")
+}
+
+// 챗봇 FAQ
+model ChatbotFaq {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  question  String
+  answer    String
+  category  String?
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("chatbot_faqs")
+}

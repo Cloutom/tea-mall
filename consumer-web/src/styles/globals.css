@@ -1,0 +1,23 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { font-family: 'Noto Sans KR', sans-serif; }
+  body { @apply bg-white text-gray-900; }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 bg-tea-600 text-white font-semibold px-5 py-2.5 rounded-xl hover:bg-tea-700 active:bg-tea-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 border border-gray-200 text-gray-700 font-semibold px-5 py-2.5 rounded-xl hover:bg-gray-50 transition-colors;
+  }
+  .input-base {
+    @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-tea-400 focus:border-transparent transition-all;
+  }
+  .card {
+    @apply bg-white rounded-2xl border border-gray-100 p-4;
+  }
+}
