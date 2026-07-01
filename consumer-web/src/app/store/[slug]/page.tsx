@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { publicApi } from '@/lib/api';
+import { publicApi, consumerAuthApi } from '@/lib/api';
+import { useAuthStore } from '@/store/authStore';
 import Link from 'next/link';
-import { Search, Star, ChevronDown, HelpCircle, ChevronUp, MessageSquare } from 'lucide-react';
+import { Search, Star, ChevronDown, HelpCircle, ChevronUp, MessageSquare, Heart } from 'lucide-react';
 import { clsx } from 'clsx';
 import StorePopup from '@/components/StorePopup';
 import NavBar from '@/components/NavBar';
@@ -31,12 +32,35 @@ export default function StoreHomePage() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   // QnA 상태
+  const [showLoginModal, setShowLoginModal] = useState(false);
   const [qnaPage, setQnaPage] = useState(1);
   const [expandedQnaId, setExpandedQnaId] = useState<string | null>(null);
   const [showQnaForm, setShowQnaForm] = useState(false);
   const [qnaName, setQnaName] = useState('');
   const [qnaQuestion, setQnaQuestion] = useState('');
   const [qnaSubmitting, setQnaSubmitting] = useState(false);
+
+  const { accessToken } = useAuthStore();
+
+  const { data: wishlistData, refetch: refetchWishlist } = useQuery({
+    queryKey: ['my-wishlists'],
+    queryFn: () => consumerAuthApi.getWishlists(accessToken!).then((r) => r.data.data),
+    enabled: !!accessToken,
+  });
+  const serverWishlisted = (wishlistData || []).some((w: any) => w.store?.slug === slug);
+  const [optimisticWish, setOptimisticWish] = useState<boolean | null>(null);
+  const isWishlisted = optimisticWish !== null ? optimisticWish : serverWishlisted;
+
+  const wishlistMutation = useMutation({
+    mutationFn: () => consumerAuthApi.toggleWishlist(slug, accessToken!),
+    onMutate: () => { setOptimisticWish(!isWishlisted); },
+    onSuccess: async () => {
+      await refetchWishlist();
+      queryClient.invalidateQueries({ queryKey: ['store', slug] });
+      setOptimisticWish(null);
+    },
+    onError: () => { setOptimisticWish(null); },
+  });
 
   const { data: store, isLoading: storeLoading, isError: storeError } = useQuery({
     queryKey: ['store', slug],
@@ -114,6 +138,36 @@ export default function StoreHomePage() {
     <div className="min-h-screen bg-gray-50">
       {popupsData && popupsData.length > 0 && <StorePopup popups={popupsData} />}
 
+      {/* 로그인 안내 모달 */}
+      {showLoginModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowLoginModal(false)}>
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center mb-5">
+              <div className="w-14 h-14 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                <Heart size={28} className="text-red-400" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900">회원가입이 필요합니다</h3>
+              <p className="text-sm text-gray-500 mt-1">찜 기능은 로그인 후 이용할 수 있어요.<br />회원가입하고 좋아하는 스토어의 소식을 받아보세요!</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowLoginModal(false)}
+                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-500 hover:bg-gray-50 transition-colors">
+                취소
+              </button>
+              <Link href={`/auth/register?redirect=/store/${slug}`}
+                className="flex-1 py-2.5 bg-tea-600 text-white rounded-xl text-sm font-medium text-center hover:bg-tea-700 transition-colors">
+                회원가입
+              </Link>
+            </div>
+            <div className="mt-3 text-center">
+              <Link href={`/auth/login?redirect=/store/${slug}`} className="text-xs text-gray-400 hover:text-tea-600">
+                이미 계정이 있으신가요? 로그인
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 통합 상단바 */}
       <NavBar title={store.name} themeColor={themeColor} />
 
@@ -139,13 +193,62 @@ export default function StoreHomePage() {
                 <span className="text-white text-xl font-bold">{store.name?.[0]}</span>
               </div>
             )}
-            <div className="pb-1 min-w-0">
+            <div className="pb-1 min-w-0 flex-1">
               <h2 className="text-lg font-bold text-gray-900 truncate">{store.name}</h2>
               {store.description && <p className="text-xs text-gray-500 truncate">{store.description}</p>}
+              {(store.instagramUrl || store.youtubeUrl || store.naverBlogUrl) && (
+                <div className="flex items-center gap-2 mt-1.5">
+                  {store.instagramUrl && (
+                    <a href={store.instagramUrl} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-[11px] text-pink-500 hover:underline">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+                      Instagram
+                    </a>
+                  )}
+                  {store.youtubeUrl && (
+                    <a href={store.youtubeUrl} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-[11px] text-red-500 hover:underline">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+                      YouTube
+                    </a>
+                  )}
+                  {store.naverBlogUrl && (
+                    <a href={store.naverBlogUrl} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-[11px] text-green-600 hover:underline">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16.273 12.845L7.376 0H0v24h7.726V11.156L16.624 24H24V0h-7.727v12.845z"/></svg>
+                      Blog
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
+            <button
+              onClick={() => { if (!accessToken) { setShowLoginModal(true); return; } wishlistMutation.mutate(); }}
+              className={clsx('shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition-all mb-1',
+                isWishlisted ? 'bg-red-50 border-red-200 text-red-500' : 'bg-white border-gray-200 text-gray-500 hover:border-red-200 hover:text-red-400'
+              )}
+            >
+              <Heart size={15} className={isWishlisted ? 'fill-red-500' : ''} />
+              {isWishlisted ? '찜' : '찜하기'}
+            </button>
           </div>
         </div>
       </div>
+
+      {/* 휴업 안내 */}
+      {!store.isOpen && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-3">
+          <div className="max-w-5xl mx-auto text-sm text-amber-800">
+            <p className="font-semibold">현재 휴업 중입니다</p>
+            {store.closedMessage && <p className="text-xs text-amber-600 mt-0.5">{store.closedMessage}</p>}
+            {store.vacationEndAt && (
+              <p className="text-xs text-amber-500 mt-0.5">
+                영업 재개 예정: {new Date(store.vacationEndAt).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 배송비 안내 바 */}
       {(store.shippingFee > 0 || store.freeShippingThreshold) && (
@@ -204,6 +307,59 @@ export default function StoreHomePage() {
         </div>
       </div>
 
+      {/* 섹션별 상품 */}
+      {(() => {
+        const secs = (store.pageSections as any[]) || [];
+        const enabled = secs.filter((s: any) => s.enabled).sort((a: any, b: any) => a.order - b.order);
+        if (!enabled.length) return null;
+
+        const bestProducts = [...products].sort((a: any, b: any) => (b.totalSales || 0) - (a.totalSales || 0)).slice(0, 6);
+        const newProducts = [...products].sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 6);
+        const trendingProducts = [...products].sort((a: any, b: any) => (b.totalViews || 0) - (a.totalViews || 0)).slice(0, 6);
+        const reviewProducts = [...products].sort((a: any, b: any) => (b._count?.reviews || 0) - (a._count?.reviews || 0)).slice(0, 6);
+        const discountProducts = products.filter((p: any) => p.discountRate && p.discountRate > 0).slice(0, 6);
+
+        const renderHScroll = (items: any[], label: string) => {
+          if (!items.length) return null;
+          return (
+            <section className="max-w-5xl mx-auto px-4 py-4">
+              <h3 className="text-sm font-bold text-gray-900 mb-3">{label}</h3>
+              <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollbarWidth: 'none' }}>
+                {items.map((p: any) => (
+                  <Link key={p.id} href={`/store/${slug}/products/${p.id}`} className="shrink-0 w-36 group">
+                    <div className="w-36 h-36 rounded-xl overflow-hidden bg-gray-100 mb-1.5 relative">
+                      {imgUrl(p.thumbnail) ? (
+                        <img src={imgUrl(p.thumbnail)!} alt={p.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                      ) : <div className="w-full h-full bg-gray-100" />}
+                      {p.stock === 0 ? (
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><span className="text-white text-xs font-bold">품절</span></div>
+                      ) : !store.isOpen ? (
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center"><span className="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">휴업중</span></div>
+                      ) : null}
+                    </div>
+                    <p className="text-xs font-medium text-gray-800 truncate">{p.name}</p>
+                    <div className="flex items-center gap-1">
+                      {p.discountRate && <span className="text-xs font-bold text-red-500">{p.discountRate}%</span>}
+                      <span className="text-xs font-bold text-gray-900">{p.price?.toLocaleString()}원</span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          );
+        };
+
+        return enabled.map((sec: any) => {
+          if (sec.key === 'best') return renderHScroll(bestProducts, '베스트 상품');
+          if (sec.key === 'new') return renderHScroll(newProducts, '신상품');
+          if (sec.key === 'trending') return renderHScroll(trendingProducts, '인기 급상승');
+          if (sec.key === 'review') return renderHScroll(reviewProducts, '리뷰 많은 상품');
+          if (sec.key === 'discount') return renderHScroll(discountProducts, '할인 상품');
+          if (sec.key === 'category' || sec.key === 'all') return null;
+          return null;
+        });
+      })()}
+
       {/* 상품 목록 */}
       <div className="max-w-5xl mx-auto px-4 py-5">
         <div className="flex items-center justify-between mb-4">
@@ -258,9 +414,13 @@ export default function StoreHomePage() {
                       <Star size={14} className="fill-amber-400 text-amber-400" />
                     </div>
                   )}
-                  {product.stock === 0 && (
+                  {product.stock === 0 ? (
                     <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                       <span className="text-white text-sm font-bold">품절</span>
+                    </div>
+                  ) : !store.isOpen && (
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                      <span className="bg-amber-500 text-white text-xs font-bold px-3 py-1 rounded-full">휴업중</span>
                     </div>
                   )}
                 </div>

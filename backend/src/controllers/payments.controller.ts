@@ -3,6 +3,7 @@ import axios from 'axios';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import prisma from '../config/database';
+import { notifySellerNewOrder, notifySellerOrderStatus } from '../utils/kakao-notify';
 
 const CONSUMER_SECRET = process.env.CONSUMER_JWT_SECRET || 'consumer-access-secret-change-in-prod';
 const TOSS_SECRET = process.env.TOSS_SECRET_KEY || 'test_sk_zXLkKEypNArWmo50nX3lmeaxYG5R';
@@ -84,7 +85,21 @@ export const prepareTossPayment = async (req: Request, res: Response): Promise<v
     const appliedShippingFee = (storeFreeThreshold !== null && totalAmount >= storeFreeThreshold)
       ? 0
       : storeShippingFee;
-    const finalAmount = totalAmount + appliedShippingFee;
+
+    // 포인트 사용 처리
+    const usePoint = parseInt(req.body.usePoint) || 0;
+    let pointDiscount = 0;
+    if (usePoint > 0 && consumerId) {
+      const earn = await prisma.pointHistory.aggregate({ where: { consumerId, type: 'EARN' }, _sum: { amount: true } });
+      const use = await prisma.pointHistory.aggregate({ where: { consumerId, type: 'USE' }, _sum: { amount: true } });
+      const balance = (earn._sum.amount || 0) + (use._sum.amount || 0);
+      pointDiscount = Math.min(usePoint, balance, totalAmount + appliedShippingFee);
+      if (pointDiscount > 0) {
+        await prisma.pointHistory.create({ data: { consumerId, amount: -pointDiscount, type: 'USE', reason: '주문 시 포인트 사용' } });
+      }
+    }
+
+    const finalAmount = totalAmount + appliedShippingFee - pointDiscount;
 
     if (Math.abs(finalAmount - Number(amount)) > 1) {
       res.status(400).json({ success: false, error: '결제 금액이 올바르지 않습니다.' });
@@ -109,7 +124,7 @@ export const prepareTossPayment = async (req: Request, res: Response): Promise<v
         deliveryMemo: deliveryMemo || '',
         totalAmount,
         shippingFee: appliedShippingFee,
-        discountAmount: 0,
+        discountAmount: pointDiscount,
         finalAmount,
         items: { create: orderItemsData },
       },
@@ -166,9 +181,20 @@ export const confirmTossPayment = async (req: Request, res: Response): Promise<v
     await Promise.all(order.items.map((item) =>
       prisma.product.updateMany({
         where: { id: item.productId },
-        data: { stock: { decrement: item.quantity }, totalSales: { increment: item.quantity } },
+        data: { stock: { decrement: item.quantity }, totalSales: { increment: item.quantity }, totalRevenue: { increment: item.unitPrice * item.quantity } },
       })
     ));
+
+    // 포인트 적립은 구매확정 시에만 (POST /api/consumer/auth/orders/:orderId/confirm)
+
+    // 판매자 카카오톡/SMS 알림
+    notifySellerNewOrder({
+      orderNumber: humanOrderNumber,
+      storeId: order.storeId,
+      finalAmount: order.finalAmount,
+      buyerName: order.buyerName,
+      items: order.items.map(i => ({ productName: i.productName, quantity: i.quantity })),
+    }).catch(() => {});
 
     res.json({ success: true, data: { orderNumber: humanOrderNumber, orderId: order.id } });
   } catch (err: any) {
@@ -197,7 +223,7 @@ export const lookupOrder = async (req: Request, res: Response): Promise<void> =>
 // 소비자/비회원 취소·환불 신청
 export const requestCancelOrRefund = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { orderNumber, phone, reason } = req.body;
+    const { orderNumber, phone, reason, refundType } = req.body;
     const consumerId = getConsumerId(req);
 
     let order: any;
@@ -213,12 +239,15 @@ export const requestCancelOrRefund = async (req: Request, res: Response): Promis
 
     if (!order) { res.status(404).json({ success: false, error: '주문을 찾을 수 없습니다.' }); return; }
 
-    const nonCancellable = ['CANCELLED', 'REFUND_REQ', 'REFUNDED'];
+    const nonCancellable = ['CANCELLED', 'REFUND_REQ', 'REFUNDED', 'PURCHASE_CONFIRMED'];
     if (nonCancellable.includes(order.status)) {
       res.status(400).json({ success: false, error: '이미 취소/환불 처리된 주문입니다.' }); return;
     }
 
     const cancelReason = reason || '고객 요청';
+    const validTypes = ['BUYER_REMORSE', 'PRODUCT_DEFECT'];
+    const type = validTypes.includes(refundType) ? refundType : null;
+    const payer = type === 'BUYER_REMORSE' ? 'BUYER' : type === 'PRODUCT_DEFECT' ? 'SELLER' : null;
 
     // PENDING이고 결제 전이면 즉시 취소
     if (order.status === 'PENDING' && !order.paymentId) {
@@ -233,8 +262,19 @@ export const requestCancelOrRefund = async (req: Request, res: Response): Promis
     // 결제 완료 이후: 환불 신청 → 판매자가 처리
     await prisma.order.update({
       where: { id: order.id },
-      data: { status: 'REFUND_REQ', cancelReason },
+      data: {
+        status: 'REFUND_REQ',
+        cancelReason,
+        refundType: type,
+        refundReason: reason || null,
+        returnShippingPayer: payer,
+        refundRequestedAt: new Date(),
+      },
     });
+    notifySellerOrderStatus({
+      orderNumber: order.orderNumber, storeId: order.storeId,
+      status: 'REFUND_REQ', buyerName: order.buyerName,
+    }).catch(() => {});
     res.json({ success: true, message: '취소/환불 신청이 접수되었습니다. 판매자 확인 후 처리됩니다.', data: { status: 'REFUND_REQ' } });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || '처리 중 오류가 발생했습니다.' });

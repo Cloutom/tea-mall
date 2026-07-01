@@ -12,6 +12,12 @@ export interface Seller {
   businessCategory?: string;
   businessVerified: boolean;
   businessVerifiedAt?: string;
+  notifyOrder?: boolean;
+  notifyReview?: boolean;
+  notifySettlement?: boolean;
+  notifyStock?: boolean;
+  notifySystem?: boolean;
+  notifyKakao?: boolean;
   store?: Store | null;
   createdAt: string;
 }
@@ -141,6 +147,7 @@ export type OrderStatus =
   | 'PREPARING'
   | 'SHIPPING'
   | 'DELIVERED'
+  | 'PURCHASE_CONFIRMED'
   | 'CANCELLED'
   | 'REFUND_REQ'
   | 'REFUNDED';

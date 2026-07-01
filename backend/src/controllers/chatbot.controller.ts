@@ -5,7 +5,7 @@ import prisma from '../config/database';
 export const getStoreFaqs = async (req: Request, res: Response): Promise<void> => {
   try {
     const { slug } = req.params;
-    const store = await prisma.store.findUnique({ where: { slug }, select: { id: true } });
+    const store = await prisma.store.findUnique({ where: { slug }, select: { id: true, chatbotDefaultReply: true } });
     if (!store) { res.status(404).json({ success: false, error: '스토어를 찾을 수 없습니다.' }); return; }
 
     const faqs = await prisma.chatbotFaq.findMany({
@@ -14,7 +14,7 @@ export const getStoreFaqs = async (req: Request, res: Response): Promise<void> =
       select: { id: true, question: true, answer: true, category: true },
     });
 
-    res.json({ success: true, data: faqs });
+    res.json({ success: true, data: faqs, defaultReply: store.chatbotDefaultReply || null });
   } catch {
     res.status(500).json({ success: false, error: 'FAQ 조회 중 오류가 발생했습니다.' });
   }
@@ -31,9 +31,27 @@ export const getSellerFaqs = async (req: any, res: Response): Promise<void> => {
       orderBy: [{ category: 'asc' }, { order: 'asc' }],
     });
 
-    res.json({ success: true, data: faqs });
+    res.json({ success: true, data: faqs, defaultReply: store.chatbotDefaultReply || '' });
   } catch {
     res.status(500).json({ success: false, error: 'FAQ 조회 중 오류가 발생했습니다.' });
+  }
+};
+
+// 판매자 기본 답변 저장
+export const updateDefaultReply = async (req: any, res: Response): Promise<void> => {
+  try {
+    const store = await prisma.store.findUnique({ where: { sellerId: req.seller!.id } });
+    if (!store) { res.status(404).json({ success: false, error: '스토어가 없습니다.' }); return; }
+
+    const { defaultReply } = req.body;
+    await prisma.store.update({
+      where: { id: store.id },
+      data: { chatbotDefaultReply: defaultReply?.trim() || null },
+    });
+
+    res.json({ success: true, message: '기본 답변이 저장되었습니다.' });
+  } catch {
+    res.status(500).json({ success: false, error: '기본 답변 저장 중 오류가 발생했습니다.' });
   }
 };
 

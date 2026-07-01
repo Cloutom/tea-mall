@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStoreFaqs, getSellerFaqs, createFaq, updateFaq, deleteFaq } from '../controllers/chatbot.controller';
+import { getStoreFaqs, getSellerFaqs, createFaq, updateFaq, deleteFaq, updateDefaultReply } from '../controllers/chatbot.controller';
 import { authenticate } from '../middleware/auth';
 
 const router = Router();
@@ -10,6 +10,7 @@ router.get('/stores/:slug/chatbot', getStoreFaqs);
 // 판매자 - FAQ 관리
 router.get('/seller/chatbot', authenticate, getSellerFaqs as any);
 router.post('/seller/chatbot', authenticate, createFaq as any);
+router.put('/seller/chatbot/default-reply', authenticate, updateDefaultReply as any);
 router.patch('/seller/chatbot/:id', authenticate, updateFaq as any);
 router.delete('/seller/chatbot/:id', authenticate, deleteFaq as any);
 

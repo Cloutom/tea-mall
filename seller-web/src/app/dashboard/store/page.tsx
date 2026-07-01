@@ -35,8 +35,20 @@ const LAYOUT_OPTIONS = [
 
 export default function StorePage() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'basic' | 'theme' | 'banner' | 'policy' | 'popup' | 'shipping'>('basic');
+  const [activeTab, setActiveTab] = useState<'basic' | 'theme' | 'banner' | 'policy' | 'popup' | 'shipping' | 'sections'>('basic');
   const [showPreview, setShowPreview] = useState(false);
+  const DEFAULT_SECTIONS = [
+    { key: 'best', label: '베스트 상품', desc: '판매량 기준 인기 상품', enabled: true, order: 0 },
+    { key: 'new', label: '신상품', desc: '최근 등록된 상품', enabled: true, order: 1 },
+    { key: 'category', label: '카테고리별 상품', desc: '스토어 카테고리별 분류', enabled: true, order: 2 },
+    { key: 'all', label: '전체 상품', desc: '모든 상품 목록', enabled: true, order: 3 },
+    { key: 'trending', label: '인기 급상승', desc: '최근 조회수 급증 상품', enabled: false, order: 4 },
+    { key: 'review', label: '리뷰 많은 상품', desc: '리뷰가 많은 상품 순', enabled: false, order: 5 },
+    { key: 'discount', label: '할인 상품', desc: '현재 할인 중인 상품', enabled: false, order: 6 },
+  ];
+  const [sections, setSections] = useState(DEFAULT_SECTIONS);
+  const [sectionsLoaded, setSectionsLoaded] = useState(false);
+  const [productLayout, setProductLayout] = useState<'grid' | 'list'>('grid');
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [bannerFile, setBannerFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState('');
@@ -72,7 +84,18 @@ export default function StorePage() {
   const popupList: any[] = popupResult?.popups || [];
   const popupDisplayMode: string = popupResult?.displayMode || 'individual';
 
-  const store = storeData;
+  const store: any = storeData;
+
+  if (store?.pageSections && !sectionsLoaded) {
+    const saved = store.pageSections as any[];
+    const merged = DEFAULT_SECTIONS.map(d => {
+      const s = saved.find((x: any) => x.key === d.key);
+      return s ? { ...d, enabled: s.enabled, order: s.order } : d;
+    }).sort((a, b) => a.order - b.order);
+    setSections(merged);
+    setProductLayout(store.layoutType === 'list' ? 'list' : 'grid');
+    setSectionsLoaded(true);
+  }
 
   const basicForm = useForm({
     values: {
@@ -81,6 +104,8 @@ export default function StorePage() {
       isOpen: store?.isOpen ?? true,
       openMessage: store?.openMessage || '',
       closedMessage: store?.closedMessage || '',
+      vacationStartAt: store?.vacationStartAt ? new Date(store.vacationStartAt).toISOString().split('T')[0] : '',
+      vacationEndAt: store?.vacationEndAt ? new Date(store.vacationEndAt).toISOString().split('T')[0] : '',
       instagramUrl: store?.instagramUrl || '',
       naverBlogUrl: store?.naverBlogUrl || '',
       youtubeUrl: store?.youtubeUrl || '',
@@ -368,9 +393,9 @@ export default function StorePage() {
 
   const tabs = [
     { id: 'basic', label: '기본 정보', icon: Store },
-    { id: 'theme', label: '테마/디자인', icon: Palette },
     { id: 'banner', label: '배너 관리', icon: Image },
     { id: 'popup', label: '팝업 관리', icon: Megaphone },
+    { id: 'sections', label: '페이지 구성', icon: Layout },
     { id: 'policy', label: '정책/안내', icon: Globe },
     { id: 'shipping', label: '배송비 설정', icon: Truck },
   ];
@@ -479,22 +504,50 @@ export default function StorePage() {
                 <textarea {...basicForm.register('description')} className="input-base h-24 resize-none" placeholder="스토어를 소개하는 문구를 입력하세요" />
               </div>
 
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" {...basicForm.register('isOpen')} className="rounded text-tea-600 focus:ring-tea-500" />
-                  <span className="text-sm font-medium text-gray-700">영업중</span>
-                </label>
-              </div>
+              {/* 영업 상태 */}
+              <div className="bg-gray-50 rounded-xl p-4 space-y-3 border border-gray-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">영업 상태</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {basicForm.watch('isOpen') ? '현재 영업중입니다' : '현재 휴업중입니다'}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" {...basicForm.register('isOpen')} className="sr-only peer" />
+                    <div className="w-11 h-6 bg-gray-300 peer-focus:ring-2 peer-focus:ring-tea-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-tea-600"></div>
+                    <span className="ml-2 text-sm font-medium text-gray-700">{basicForm.watch('isOpen') ? '영업중' : '휴업'}</span>
+                  </label>
+                </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="label-base">영업 메시지</label>
-                  <input {...basicForm.register('openMessage')} placeholder="예: 오늘도 좋은 차 한잔!" className="input-base" />
-                </div>
-                <div>
-                  <label className="label-base">휴무 메시지</label>
-                  <input {...basicForm.register('closedMessage')} placeholder="예: 잠시 휴가 중입니다" className="input-base" />
-                </div>
+                {!basicForm.watch('isOpen') && (
+                  <div className="space-y-3 pt-2 border-t border-gray-200">
+                    <div>
+                      <label className="label-base">휴업 안내 메시지</label>
+                      <input {...basicForm.register('closedMessage')} placeholder="예: 잠시 휴가 중입니다. 7월 5일부터 정상 영업합니다." className="input-base" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="label-base">휴업 시작일 <span className="text-gray-400 font-normal">(선택)</span></label>
+                        <input type="date" {...basicForm.register('vacationStartAt')} className="input-base" />
+                      </div>
+                      <div>
+                        <label className="label-base">휴업 종료일 <span className="text-gray-400 font-normal">(선택)</span></label>
+                        <input type="date" {...basicForm.register('vacationEndAt')} className="input-base" />
+                      </div>
+                    </div>
+                    <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-2">
+                      종료일을 설정하면 해당 날짜에 자동으로 영업 상태로 전환됩니다.
+                    </p>
+                  </div>
+                )}
+
+                {basicForm.watch('isOpen') && (
+                  <div>
+                    <label className="label-base">영업 안내 메시지 <span className="text-gray-400 font-normal">(선택)</span></label>
+                    <input {...basicForm.register('openMessage')} placeholder="예: 오늘도 좋은 차 한잔의 여유를!" className="input-base" />
+                  </div>
+                )}
               </div>
 
               <div>
@@ -513,8 +566,8 @@ export default function StorePage() {
             </form>
           )}
 
-          {/* 테마/디자인 */}
-          {activeTab === 'theme' && (
+          {/* 테마/디자인 — 제거됨, 페이지 구성으로 통합 */}
+          {false && (
             <form onSubmit={themeForm.handleSubmit(onThemeSubmit)} className="card space-y-6">
               <h2 className="font-semibold text-gray-900">테마 & 디자인</h2>
 
@@ -1121,6 +1174,132 @@ export default function StorePage() {
                 className="btn-primary w-full">
                 {updateShippingMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                 배송비 설정 저장
+              </button>
+            </div>
+          )}
+
+          {/* 페이지 구성 */}
+          {activeTab === 'sections' && (
+            <div className="space-y-5">
+              {/* 상품 레이아웃 */}
+              <div className="card space-y-4">
+                <div>
+                  <h2 className="font-semibold text-gray-900 text-sm sm:text-base">상품 레이아웃</h2>
+                  <p className="text-gray-500 text-xs mt-0.5">상품 목록이 소비자에게 보여지는 형태를 선택하세요</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => setProductLayout('grid')}
+                    className={`p-4 rounded-xl border-2 transition-all text-center ${productLayout === 'grid' ? 'border-tea-500 bg-tea-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                    <div className="grid grid-cols-3 gap-1 mb-2 mx-auto w-16">
+                      {Array.from({ length: 6 }).map((_, i) => <div key={i} className={`aspect-square rounded ${productLayout === 'grid' ? 'bg-tea-300' : 'bg-gray-300'}`} />)}
+                    </div>
+                    <p className={`text-sm font-medium ${productLayout === 'grid' ? 'text-tea-700' : 'text-gray-600'}`}>그리드</p>
+                    <p className="text-xs text-gray-400 mt-0.5">2~4열 카드형</p>
+                  </button>
+                  <button type="button" onClick={() => setProductLayout('list')}
+                    className={`p-4 rounded-xl border-2 transition-all text-center ${productLayout === 'list' ? 'border-tea-500 bg-tea-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                    <div className="space-y-1 mb-2 mx-auto w-16">
+                      {Array.from({ length: 3 }).map((_, i) => <div key={i} className={`h-3 rounded ${productLayout === 'list' ? 'bg-tea-300' : 'bg-gray-300'}`} />)}
+                    </div>
+                    <p className={`text-sm font-medium ${productLayout === 'list' ? 'text-tea-700' : 'text-gray-600'}`}>리스트</p>
+                    <p className="text-xs text-gray-400 mt-0.5">가로형 목록</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* 페이지 섹션 */}
+              <div className="card space-y-4">
+                <div>
+                  <h2 className="font-semibold text-gray-900 text-sm sm:text-base">표시할 섹션</h2>
+                  <p className="text-gray-500 text-xs mt-0.5">ON/OFF로 선택하고 화살표로 순서를 변경하세요</p>
+                </div>
+
+                <div className="space-y-2">
+                  {sections.map((section, idx) => (
+                    <div key={section.key}
+                      className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${section.enabled ? 'bg-white border-tea-200' : 'bg-gray-50 border-gray-100'}`}>
+                      <div className="flex flex-col gap-0.5 shrink-0">
+                        <button type="button" disabled={idx === 0}
+                          onClick={() => setSections(prev => {
+                            const next = [...prev];
+                            [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                            return next.map((s, i) => ({ ...s, order: i }));
+                          })}
+                          className="text-gray-400 hover:text-gray-600 disabled:opacity-20">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 15l-6-6-6 6"/></svg>
+                        </button>
+                        <button type="button" disabled={idx === sections.length - 1}
+                          onClick={() => setSections(prev => {
+                            const next = [...prev];
+                            [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+                            return next.map((s, i) => ({ ...s, order: i }));
+                          })}
+                          className="text-gray-400 hover:text-gray-600 disabled:opacity-20">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                      </div>
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${section.enabled ? 'bg-tea-100 text-tea-700' : 'bg-gray-200 text-gray-400'}`}>
+                        {section.enabled ? sections.filter(s => s.enabled).indexOf(section) + 1 : '-'}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-medium ${section.enabled ? 'text-gray-900' : 'text-gray-400'}`}>{section.label}</p>
+                        <p className="text-xs text-gray-400">{section.desc}</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input type="checkbox" checked={section.enabled}
+                          onChange={(e) => setSections(prev => prev.map(s => s.key === section.key ? { ...s, enabled: e.target.checked } : s))}
+                          className="sr-only peer" />
+                        <div className="w-9 h-5 bg-gray-300 peer-focus:ring-2 peer-focus:ring-tea-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-tea-600"></div>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 미리보기 */}
+              <div className="card space-y-3">
+                <p className="text-sm font-semibold text-gray-700">페이지 미리보기</p>
+                <div className="bg-gray-50 rounded-xl p-4 space-y-3 border border-gray-100">
+                  <div className="h-16 bg-gray-200 rounded-lg flex items-center justify-center text-xs text-gray-400">배너</div>
+                  <div className="flex items-center gap-2 px-1">
+                    <div className="w-8 h-8 bg-gray-200 rounded-full shrink-0" />
+                    <div><div className="h-3 w-20 bg-gray-200 rounded" /><div className="h-2 w-14 bg-gray-100 rounded mt-1" /></div>
+                  </div>
+                  {sections.filter(s => s.enabled).map((s) => (
+                    <div key={s.key} className="border border-gray-200 rounded-lg p-2.5 bg-white">
+                      <p className="text-[10px] font-semibold text-gray-600 mb-1.5">{s.label}</p>
+                      {s.key === 'all' || s.key === 'category' ? (
+                        <div className={productLayout === 'list' ? 'space-y-1' : 'grid grid-cols-4 gap-1'}>
+                          {Array.from({ length: productLayout === 'list' ? 3 : 4 }).map((_, i) =>
+                            productLayout === 'list'
+                              ? <div key={i} className="flex gap-1.5"><div className="w-6 h-6 bg-gray-100 rounded shrink-0" /><div className="flex-1"><div className="h-2 bg-gray-100 rounded w-3/4" /><div className="h-2 bg-gray-100 rounded w-1/2 mt-1" /></div></div>
+                              : <div key={i} className="aspect-square bg-gray-100 rounded" />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex gap-1.5">
+                          {Array.from({ length: 4 }).map((_, i) => <div key={i} className="w-10 h-12 bg-gray-100 rounded shrink-0" />)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 저장 버튼 */}
+              <button type="button"
+                onClick={async () => {
+                  try {
+                    const fd = new FormData();
+                    fd.append('pageSections', JSON.stringify(sections.map(s => ({ key: s.key, enabled: s.enabled, order: s.order }))));
+                    fd.append('layoutType', productLayout);
+                    await storeApi.updateStore(fd);
+                    queryClient.invalidateQueries({ queryKey: ['my-store'] });
+                    toast.success('페이지 구성이 저장되었습니다.');
+                  } catch { toast.error('저장에 실패했습니다.'); }
+                }}
+                className="btn-primary w-full">
+                <Save size={16} /> 페이지 구성 저장
               </button>
             </div>
           )}

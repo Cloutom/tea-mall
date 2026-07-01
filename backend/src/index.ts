@@ -57,19 +57,28 @@ app.use(cookieParser());
 
 // Rate Limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15분
-  max: 100,
+  windowMs: 15 * 60 * 1000,
+  max: 500,
   message: { success: false, error: '너무 많은 요청이 발생했습니다. 잠시 후 다시 시도해주세요.' },
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { success: false, error: '로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.' },
+  max: 10,
+  message: { success: false, error: '로그인 시도가 너무 많습니다. 15분 후 다시 시도해주세요.' },
+});
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { success: false, error: '관리자 로그인 시도가 너무 많습니다. 15분 후 다시 시도해주세요.' },
 });
 
 app.use('/api', limiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
+app.use('/api/consumer/auth/login', authLimiter);
+app.use('/api/admin/login', adminLimiter);
+app.use('/api/auth/phone', authLimiter);
+app.use('/api/consumer/auth/phone', authLimiter);
 
 // 정적 파일 (S3 전환 전까지 프로덕션에서도 사용)
 app.use('/uploads', (req, res, next) => {

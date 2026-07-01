@@ -4,9 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import Link from 'next/link';
-import { Shield, Users, Clock, CheckCircle, XCircle, Package, ShoppingBag, LogOut } from 'lucide-react';
+import { Shield, Clock, CheckCircle, XCircle, Package, ShoppingBag, LogOut, Image, Users, Bell, Gift, Settings, Flag, UserCheck } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 function useAdminAuth() {
   const router = useRouter();
@@ -38,13 +37,14 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!token) return;
     const headers = { Authorization: `Bearer ${token}` };
-    axios.get(`${API_URL}/api/admin/stats`, { headers }).then((r) => setStats(r.data.data)).catch(() => {});
-    axios.get(`${API_URL}/api/admin/sellers?status=PENDING&limit=5`, { headers }).then((r) => setPendingSellers(r.data.data || [])).catch(() => {});
+    const handleErr = (e: any) => { if (e.response?.status === 401) { localStorage.removeItem('admin-token'); window.location.href = '/admin/login'; } };
+    axios.get(`/api/admin/stats`, { headers }).then((r) => setStats(r.data.data)).catch(handleErr);
+    axios.get(`/api/admin/sellers?status=PENDING&limit=5`, { headers }).then((r) => setPendingSellers(r.data.data || [])).catch(handleErr);
   }, [token]);
 
   const handleApprove = async (id: string) => {
     if (!token) return;
-    await axios.patch(`${API_URL}/api/admin/sellers/${id}/approve`, {}, { headers: { Authorization: `Bearer ${token}` } });
+    await axios.patch(`/api/admin/sellers/${id}/approve`, {}, { headers: { Authorization: `Bearer ${token}` } });
     setPendingSellers((prev) => prev.filter((s) => s.id !== id));
     if (stats) setStats({ ...stats, pendingSellers: stats.pendingSellers - 1, approvedSellers: stats.approvedSellers + 1 });
   };
@@ -53,7 +53,7 @@ export default function AdminDashboard() {
     const reason = prompt('거절 사유를 입력하세요:');
     if (reason === null) return;
     if (!token) return;
-    await axios.patch(`${API_URL}/api/admin/sellers/${id}/reject`, { reason }, { headers: { Authorization: `Bearer ${token}` } });
+    await axios.patch(`/api/admin/sellers/${id}/reject`, { reason }, { headers: { Authorization: `Bearer ${token}` } });
     setPendingSellers((prev) => prev.filter((s) => s.id !== id));
     if (stats) setStats({ ...stats, pendingSellers: stats.pendingSellers - 1, rejectedSellers: stats.rejectedSellers + 1 });
   };
@@ -67,9 +67,14 @@ export default function AdminDashboard() {
           <Shield size={22} className="text-amber-400" />
           <span className="font-bold text-lg">teabri Admin</span>
         </div>
-        <div className="flex items-center gap-4">
-          <Link href="/admin/sellers" className="text-sm text-gray-300 hover:text-white">판매자 관리</Link>
-          <span className="text-sm text-gray-400">{admin?.name}</span>
+        <div className="flex items-center gap-3 flex-wrap">
+          <Link href="/admin/sellers" className="text-sm text-gray-300 hover:text-white flex items-center gap-1"><Users size={14} /> 판매자</Link>
+          <Link href="/admin/consumers" className="text-sm text-gray-300 hover:text-white flex items-center gap-1"><UserCheck size={14} /> 소비자</Link>
+          <Link href="/admin/reports" className="text-sm text-gray-300 hover:text-white flex items-center gap-1"><Flag size={14} /> 신고/문의</Link>
+          <Link href="/admin/notices" className="text-sm text-gray-300 hover:text-white flex items-center gap-1"><Bell size={14} /> 공지</Link>
+          <Link href="/admin/main-content" className="text-sm text-gray-300 hover:text-white flex items-center gap-1"><Image size={14} /> 메인 관리</Link>
+          <Link href="/admin/settings" className="text-sm text-gray-300 hover:text-white flex items-center gap-1"><Settings size={14} /> 설정</Link>
+          <span className="text-sm text-gray-400 ml-1">{admin?.name}</span>
           <button onClick={logout} className="text-gray-400 hover:text-red-400"><LogOut size={18} /></button>
         </div>
       </header>
@@ -91,6 +96,52 @@ export default function AdminDashboard() {
               <p className="text-sm text-gray-400">{label}</p>
             </div>
           ))}
+        </div>
+
+        {/* 퀵 링크 */}
+        <div className="grid grid-cols-2 gap-4">
+          <Link href="/admin/main-content" className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-amber-500/50 transition-colors group">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-amber-900/30 text-amber-400"><Image size={20} /></div>
+              <h3 className="font-semibold group-hover:text-amber-400 transition-colors">메인 배너 관리</h3>
+            </div>
+            <p className="text-sm text-gray-400">소비자 메인 페이지의 배너와 팝업을 관리합니다</p>
+          </Link>
+          <Link href="/admin/sellers" className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-green-500/50 transition-colors group">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-green-900/30 text-green-400"><Users size={20} /></div>
+              <h3 className="font-semibold group-hover:text-green-400 transition-colors">판매자 관리</h3>
+            </div>
+            <p className="text-sm text-gray-400">판매자 승인, 거절, 취소를 관리합니다</p>
+          </Link>
+          <Link href="/admin/consumers" className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-cyan-500/50 transition-colors group">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-cyan-900/30 text-cyan-400"><UserCheck size={20} /></div>
+              <h3 className="font-semibold group-hover:text-cyan-400 transition-colors">소비자 관리</h3>
+            </div>
+            <p className="text-sm text-gray-400">소비자 계정 조회 (개인정보 마스킹)</p>
+          </Link>
+          <Link href="/admin/reports" className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-red-500/50 transition-colors group">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-red-900/30 text-red-400"><Flag size={20} /></div>
+              <h3 className="font-semibold group-hover:text-red-400 transition-colors">신고 / 문의</h3>
+            </div>
+            <p className="text-sm text-gray-400">신고 처리 및 1:1 문의 답변</p>
+          </Link>
+          <Link href="/admin/notices" className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-blue-500/50 transition-colors group">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-900/30 text-blue-400"><Bell size={20} /></div>
+              <h3 className="font-semibold group-hover:text-blue-400 transition-colors">공지사항 관리</h3>
+            </div>
+            <p className="text-sm text-gray-400">소비자에게 보이는 공지사항을 관리합니다</p>
+          </Link>
+          <Link href="/admin/settings" className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-purple-500/50 transition-colors group">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-purple-900/30 text-purple-400"><Settings size={20} /></div>
+              <h3 className="font-semibold group-hover:text-purple-400 transition-colors">관리자 설정</h3>
+            </div>
+            <p className="text-sm text-gray-400">포인트·리뷰 적립, 수수료, 알림 번호 등 설정</p>
+          </Link>
         </div>
 
         {/* 승인 대기 판매자 */}

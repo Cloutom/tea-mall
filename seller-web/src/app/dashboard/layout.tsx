@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
+import { authApi } from '@/lib/api';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import { clsx } from 'clsx';
@@ -13,13 +14,20 @@ const STORE_SETUP_PATHS = ['/dashboard/store', '/dashboard/shipping'];
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { isAuthenticated, _hasHydrated, seller } = useAuthStore();
+  const { isAuthenticated, _hasHydrated, seller, setSeller } = useAuthStore();
   const [collapsed, setCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!_hasHydrated || !isAuthenticated) return;
+    authApi.getMe().then((res) => {
+      if (res.data.data) setSeller(res.data.data);
+    }).catch(() => {});
+  }, [_hasHydrated, isAuthenticated]);
 
   useEffect(() => {
     if (!_hasHydrated) return;

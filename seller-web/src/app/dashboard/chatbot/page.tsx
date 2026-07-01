@@ -16,10 +16,24 @@ export default function ChatbotPage() {
   const [editQuestion, setEditQuestion] = useState('');
   const [editAnswer, setEditAnswer] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [defaultReply, setDefaultReply] = useState('');
+  const [defaultReplyLoaded, setDefaultReplyLoaded] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['seller-chatbot'],
-    queryFn: () => sellerChatbotApi.getFaqs().then((r) => r.data.data),
+    queryFn: () => sellerChatbotApi.getFaqs().then((r) => {
+      if (!defaultReplyLoaded) {
+        setDefaultReply(r.data.defaultReply || '');
+        setDefaultReplyLoaded(true);
+      }
+      return r.data.data;
+    }),
+  });
+
+  const defaultReplyMutation = useMutation({
+    mutationFn: (reply: string) => sellerChatbotApi.updateDefaultReply(reply),
+    onSuccess: () => toast.success('기본 답변이 저장되었습니다.'),
+    onError: () => toast.error('기본 답변 저장에 실패했습니다.'),
   });
 
   const createMutation = useMutation({
@@ -87,6 +101,30 @@ export default function ChatbotPage() {
               자주 묻는 배송, 교환·반품, 상품 관련 질문을 미리 등록해두세요.
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* 기본 답변 설정 */}
+      <div className="card space-y-3">
+        <div className="flex items-center gap-2">
+          <Bot size={16} className="text-gray-500" />
+          <p className="text-sm font-semibold text-gray-800">기본 답변 설정</p>
+        </div>
+        <p className="text-xs text-gray-500">등록된 FAQ에 매칭되지 않는 질문을 받았을 때 자동으로 표시되는 답변입니다.</p>
+        <textarea
+          value={defaultReply}
+          onChange={(e) => setDefaultReply(e.target.value)}
+          placeholder="예: 해당 질문에 대한 답변을 준비하지 못했습니다. 카카오톡 채널 @스토어명 으로 문의해주시면 빠르게 답변 드리겠습니다."
+          className="input-base h-20 resize-none"
+        />
+        <div className="flex justify-end">
+          <button
+            onClick={() => defaultReplyMutation.mutate(defaultReply)}
+            disabled={defaultReplyMutation.isPending}
+            className="btn-primary py-1.5 text-sm"
+          >
+            <Save size={14} /> {defaultReplyMutation.isPending ? '저장 중...' : '기본 답변 저장'}
+          </button>
         </div>
       </div>
 

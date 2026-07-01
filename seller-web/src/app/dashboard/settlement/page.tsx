@@ -2,14 +2,14 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { analyticsApi, authApi } from '@/lib/api';
+import api, { analyticsApi, storeApi } from '@/lib/api';
 import { Settlement } from '@/types';
 import {
   Wallet, ChevronLeft, ChevronRight, CheckCircle, Clock, Download,
   CalendarDays, Calculator, BookOpen, ExternalLink, AlertTriangle,
   TrendingUp, Receipt, FileText, BadgeCheck, Info, ChevronDown, ChevronUp,
 } from 'lucide-react';
-import { format, isAfter, isBefore, differenceInDays } from 'date-fns';
+import { format, isAfter, differenceInDays } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import { clsx } from 'clsx';
 import { useAuthStore } from '@/store/authStore';
@@ -65,6 +65,8 @@ export default function SettlementPage() {
   const [taxType, setTaxType] = useState<'general' | 'simplified'>('general');
   const [expenseRate, setExpenseRate] = useState(30);
   const [openGuide, setOpenGuide] = useState<string | null>(null);
+  const now = new Date();
+  const [selectedPeriods, setSelectedPeriods] = useState<string[]>([`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`]);
   const { seller } = useAuthStore();
 
   const { data, isLoading } = useQuery({
@@ -77,13 +79,127 @@ export default function SettlementPage() {
     queryFn: () => analyticsApi.getDashboard().then((r) => r.data.data),
   });
 
+  const { data: siteSettings } = useQuery({
+    queryKey: ['site-settings'],
+    queryFn: () => api.get('/api/public/point-setting').then((r) => r.data.data),
+  });
+
   const settlements: Settlement[] = data?.data || [];
   const pagination = data?.pagination;
 
   const formatKRW = (n: number) => `${Math.round(n).toLocaleString()}원`;
 
-  const totalSettled = settlements.filter((s) => s.status === 'completed').reduce((sum, s) => sum + s.netAmount, 0);
-  const totalPending = settlements.filter((s) => s.status === 'pending').reduce((sum, s) => sum + s.netAmount, 0);
+  const excelMonths = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const togglePeriod = (m: string) => {
+    setSelectedPeriods(prev =>
+      prev.includes(m) ? prev.filter(p => p !== m) : [...prev, m].sort()
+    );
+  };
+
+  const filteredSettlements = selectedPeriods.length === 0
+    ? settlements
+    : settlements.filter(s => selectedPeriods.includes(s.period));
+
+  const handleExcelDownload = async () => {
+    if (selectedPeriods.length === 0) { alert('다운로드할 월을 선택해주세요.'); return; }
+    try {
+      const allRows: any[] = [];
+
+      for (const period of [...selectedPeriods].sort()) {
+        const res = await storeApi.getSettlementDetail(period);
+        const { rows } = res.data.data;
+        for (const r of rows) allRows.push({ ...r, period });
+      }
+
+      // 정산 요약 계산
+      const periodSettlements = settlements.filter(s => selectedPeriods.includes(s.period));
+      const summaryTotalSales = periodSettlements.reduce((s, v) => s + v.totalSales, 0);
+      const summaryPending = periodSettlements.filter(s => s.status === 'PENDING').reduce((s, v) => s + v.netAmount, 0);
+      const summaryPaid = periodSettlements.filter(s => s.status === 'PAID').reduce((s, v) => s + v.netAmount, 0);
+
+      const BOM = '﻿';
+      const csvRows: string[] = [];
+
+      // 요약 헤더
+      csvRows.push(['[정산 요약]'].join(','));
+      csvRows.push(['항목', '금액'].join(','));
+      csvRows.push(['"총 판매금액"', summaryTotalSales].join(','));
+      csvRows.push(['"정산 예정 금액"', summaryPending].join(','));
+      csvRows.push(['"입금 완료 금액"', summaryPaid].join(','));
+      csvRows.push('');
+
+      // 데이터 헤더
+      const headers = [
+        '공급처', '상품명', '카테고리', '수취인', '상태', '주문날짜',
+        '도매공급가', '도매배송비', '마켓택배비', '소비자배송비', '마켓할인',
+        '마진률(%)', '마진금액', '정산가', '주문가', '순수익',
+      ];
+      csvRows.push(headers.join(','));
+
+      const sums = { wholesalePrice: 0, wholesaleShipping: 0, marketShippingCost: 0, consumerShippingFee: 0, marketDiscount: 0, marginAmount: 0, settlementPrice: 0, orderPrice: 0, netProfit: 0 };
+
+      for (const r of allRows) {
+        sums.wholesalePrice += r.wholesalePrice || 0;
+        sums.wholesaleShipping += r.wholesaleShipping || 0;
+        sums.marketShippingCost += r.marketShippingCost || 0;
+        sums.consumerShippingFee += r.consumerShippingFee || 0;
+        sums.marketDiscount += r.marketDiscount || 0;
+        sums.marginAmount += r.marginAmount || 0;
+        sums.settlementPrice += r.settlementPrice || 0;
+        sums.orderPrice += r.orderPrice || 0;
+        sums.netProfit += r.netProfit || 0;
+
+        csvRows.push([
+          `"${(r.wholesaleSupplier || '').replace(/"/g, '""')}"`,
+          `"${(r.productName || '').replace(/"/g, '""')}"`,
+          `"${(r.category || '').replace(/"/g, '""')}"`,
+          `"${(r.recipient || '').replace(/"/g, '""')}"`,
+          r.status,
+          new Date(r.orderDate).toLocaleDateString('ko-KR'),
+          r.wholesalePrice ?? '',
+          r.wholesaleShipping ?? '',
+          r.marketShippingCost ?? '',
+          r.consumerShippingFee ?? 0,
+          r.marketDiscount || '',
+          r.marginRate != null ? `${r.marginRate}%` : '',
+          r.marginAmount ?? '',
+          r.settlementPrice,
+          r.orderPrice,
+          r.netProfit ?? '',
+        ].join(','));
+      }
+
+      csvRows.push([
+        '"합계"', '', '', '', '', '',
+        sums.wholesalePrice, sums.wholesaleShipping, sums.marketShippingCost, sums.consumerShippingFee, sums.marketDiscount,
+        '', sums.marginAmount, sums.settlementPrice, sums.orderPrice, sums.netProfit,
+      ].join(','));
+      csvRows.push('');
+      csvRows.push(['"총 판매금액"', sums.orderPrice].join(','));
+      csvRows.push(['"총 순수익금"', sums.netProfit].join(','));
+
+      const fileName = selectedPeriods.length === 1
+        ? `정산내역_${selectedPeriods[0]}.csv`
+        : `정산내역_${selectedPeriods[0]}_${selectedPeriods[selectedPeriods.length - 1]}.csv`;
+
+      const blob = new Blob([BOM + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('정산 상세 데이터를 불러올 수 없습니다.');
+    }
+  };
+
+  const totalSettled = settlements.filter((s) => s.status === 'PAID').reduce((sum, s) => sum + s.netAmount, 0);
+  const totalPending = settlements.filter((s) => s.status === 'PENDING').reduce((sum, s) => sum + s.netAmount, 0);
   const annualRevenue = settlements.reduce((sum, s) => sum + s.totalSales, 0);
 
   // ─── 세금 계산 ────────────────────────────────────────────────────────────
@@ -254,19 +370,112 @@ export default function SettlementPage() {
         <div className="space-y-4">
           <div className="bg-tea-50 border border-tea-200 rounded-xl p-4 text-sm text-tea-800">
             <p className="font-semibold mb-1">정산 안내</p>
-            <ul className="text-xs text-tea-700 space-y-1 list-disc list-inside">
-              <li>정산은 매월 말일 기준으로 익월 10일에 지급됩니다.</li>
-              <li>플랫폼 수수료: 3.5% | 결제 수수료: 2%</li>
-              <li>정산 문의: 고객센터 1588-0000 (평일 9:00~18:00)</li>
-            </ul>
+            {siteSettings?.settlementNotice ? (
+              <div className="text-xs text-tea-700 whitespace-pre-line">{siteSettings.settlementNotice}</div>
+            ) : (
+              <ul className="text-xs text-tea-700 space-y-1 list-disc list-inside">
+                <li>정산은 매월 말일 기준으로 익월 10일에 지급됩니다.</li>
+                <li>플랫폼 수수료: {siteSettings?.platformFeeRate ?? 3.5}% | 결제 수수료: {siteSettings?.paymentFeeRate ?? 2}%</li>
+                <li>정산 문의: 고객센터 1588-0000 (평일 9:00~18:00)</li>
+              </ul>
+            )}
           </div>
 
           <div className="card p-0 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h2 className="font-semibold text-gray-900">정산 내역</h2>
-              <button className="btn-secondary py-1.5 px-3 text-sm">
-                <Download size={14} /> 엑셀 다운로드
-              </button>
+            <div className="px-5 py-4 border-b border-gray-100 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold text-gray-900">정산 내역</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">기간을 선택하면 해당 월 정산만 표시됩니다</p>
+                </div>
+                <button
+                  onClick={handleExcelDownload}
+                  disabled={selectedPeriods.length === 0}
+                  className={clsx(
+                    'flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold border transition-all',
+                    selectedPeriods.length > 0
+                      ? 'bg-tea-600 text-white border-tea-600 hover:bg-tea-700'
+                      : 'bg-gray-50 text-gray-300 border-gray-200 cursor-not-allowed'
+                  )}
+                >
+                  <Download size={13} />
+                  엑셀 다운로드
+                  {selectedPeriods.length > 0 && (
+                    <span className="bg-white/30 text-white text-xs px-1.5 py-0.5 rounded-full font-bold leading-none">
+                      {selectedPeriods.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* 기간 선택 */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-gray-500">기간 선택 (클릭하면 해당 월만 표시)</span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => setSelectedPeriods(excelMonths)}
+                      className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 hover:border-gray-300 transition-colors"
+                    >
+                      전체 선택
+                    </button>
+                    <button
+                      onClick={() => setSelectedPeriods([])}
+                      className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 hover:border-gray-300 transition-colors"
+                    >
+                      전체 보기
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {excelMonths.map(m => {
+                    const isSelected = selectedPeriods.includes(m);
+                    const settlement = settlements.find(s => s.period === m);
+                    return (
+                      <button
+                        key={m}
+                        onClick={() => togglePeriod(m)}
+                        className={clsx(
+                          'flex flex-col items-center px-3 py-2 rounded-xl border-2 text-xs font-medium transition-all min-w-[56px]',
+                          isSelected
+                            ? 'bg-tea-600 text-white border-tea-600 shadow-sm'
+                            : 'bg-white text-gray-600 border-gray-200 hover:border-tea-300 hover:text-tea-700'
+                        )}
+                      >
+                        <span className={clsx('font-bold text-[11px]', isSelected ? 'text-white/70' : 'text-gray-400')}>
+                          {m.split('-')[0].slice(2)}년
+                        </span>
+                        <span className="font-bold text-sm leading-tight">{m.split('-')[1]}월</span>
+                        {settlement && (
+                          <span className={clsx('mt-0.5 text-[10px] font-medium', isSelected ? 'text-white/80' : settlement.status === 'PAID' ? 'text-emerald-500' : 'text-amber-500')}>
+                            {settlement.status === 'PAID' ? '완료' : '예정'}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 선택된 기간 정산 합계 */}
+              {selectedPeriods.length > 0 && filteredSettlements.length > 0 && (
+                <div className="flex gap-3 p-3 bg-tea-50 rounded-xl border border-tea-100">
+                  <div className="flex-1 text-center">
+                    <p className="text-xs text-tea-600 font-medium">선택 기간 매출</p>
+                    <p className="text-sm font-bold text-gray-900">{formatKRW(filteredSettlements.reduce((s, v) => s + v.totalSales, 0))}</p>
+                  </div>
+                  <div className="w-px bg-tea-200" />
+                  <div className="flex-1 text-center">
+                    <p className="text-xs text-tea-600 font-medium">정산 금액 합계</p>
+                    <p className="text-sm font-bold text-tea-700">{formatKRW(filteredSettlements.reduce((s, v) => s + v.netAmount, 0))}</p>
+                  </div>
+                  <div className="w-px bg-tea-200" />
+                  <div className="flex-1 text-center">
+                    <p className="text-xs text-tea-600 font-medium">수수료 합계</p>
+                    <p className="text-sm font-bold text-red-500">-{formatKRW(filteredSettlements.reduce((s, v) => s + v.platformFee + v.paymentFee, 0))}</p>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -288,15 +497,17 @@ export default function SettlementPage() {
                         ))}
                       </tr>
                     ))
-                  ) : settlements.length === 0 ? (
+                  ) : filteredSettlements.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="text-center py-16">
                         <Wallet size={40} className="mx-auto text-gray-200 mb-3" />
-                        <p className="text-gray-400 text-sm">정산 내역이 없습니다</p>
+                        <p className="text-gray-400 text-sm">
+                          {selectedPeriods.length > 0 ? '선택한 기간의 정산 내역이 없습니다' : '정산 내역이 없습니다'}
+                        </p>
                       </td>
                     </tr>
                   ) : (
-                    settlements.map((s) => (
+                    filteredSettlements.map((s) => (
                       <tr key={s.id} className="hover:bg-gray-50/50 transition-colors">
                         <td className="px-5 py-4 text-sm font-medium text-gray-900">{s.period}</td>
                         <td className="px-5 py-4 text-sm text-right text-gray-700">{formatKRW(s.totalSales)}</td>
@@ -305,8 +516,8 @@ export default function SettlementPage() {
                         <td className="px-5 py-4 text-sm text-right font-bold text-gray-900">{formatKRW(s.netAmount)}</td>
                         <td className="px-5 py-4 text-center">
                           <span className={clsx('text-xs px-2.5 py-1 rounded-full font-medium',
-                            s.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700')}>
-                            {s.status === 'completed' ? '정산완료' : '정산예정'}
+                            s.status === 'PAID' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700')}>
+                            {s.status === 'PAID' ? '정산완료' : '정산예정'}
                           </span>
                         </td>
                         <td className="px-5 py-4 text-center text-sm text-gray-500">

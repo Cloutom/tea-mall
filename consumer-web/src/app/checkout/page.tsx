@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCartStore } from '@/store/cartStore';
-import { paymentApi, addressApi, billingApi, webAuthnApi } from '@/lib/api';
+import { paymentApi, addressApi, billingApi, webAuthnApi, consumerAuthApi, publicApi } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -46,6 +46,8 @@ export default function CheckoutPage() {
   const [showAddressPicker, setShowAddressPicker] = useState(false);
   const [shippingFee, setShippingFee] = useState(0);
   const [shippingInfo, setShippingInfo] = useState<{ shippingFee: number; freeShippingThreshold: number | null } | null>(null);
+  const [usePoint, setUsePoint] = useState(0);
+  const [pointInput, setPointInput] = useState('');
   const processingRef = useRef(false);
 
   const clientKey = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY || 'test_ck_D5GePWvyJnrK0W0k6q8gLzN97Eon';
@@ -69,6 +71,18 @@ export default function CheckoutPage() {
     queryFn: () => webAuthnApi.getAll(accessToken!).then((r) => r.data.data),
     enabled: !!accessToken && !!consumer,
   });
+
+  const { data: pointData } = useQuery({
+    queryKey: ['my-points-checkout'], queryFn: () => consumerAuthApi.getPoints(accessToken!).then(r => r.data.data), enabled: !!accessToken,
+  });
+  const { data: pointSetting } = useQuery({
+    queryKey: ['point-setting'], queryFn: () => publicApi.getPointSetting().then(r => r.data.data),
+  });
+  const myPoints = pointData?.balance || 0;
+  const earnRate = pointSetting?.earnRate || 0;
+  const minUseAmount = pointSetting?.minUseAmount || 1000;
+  const minOrderForEarn = pointSetting?.minOrderAmount || 10000;
+  const maxEarnAmount = pointSetting?.maxEarnAmount || 5000;
 
   const canBiometricPay = (billingKeys as any[]).length > 0 && (webAuthnCreds as any[]).length > 0;
   const defaultBillingKey = (billingKeys as any[]).find((k: any) => k.isDefault) || (billingKeys as any[])[0];
@@ -97,7 +111,20 @@ export default function CheckoutPage() {
     setShippingFee(fst !== null && itemsTotal >= fst ? 0 : sf);
   }, [shippingInfo, itemsTotal]);
 
-  const total = itemsTotal + shippingFee;
+  const totalBeforePoint = itemsTotal + shippingFee;
+  const total = Math.max(0, totalBeforePoint - usePoint);
+  const earnAmount = usePoint > 0 ? 0 : (totalBeforePoint >= minOrderForEarn ? Math.min(Math.round(totalBeforePoint * earnRate / 100), maxEarnAmount) : 0);
+
+  const handlePointApply = () => {
+    const v = parseInt(pointInput) || 0;
+    if (v < minUseAmount) { setUsePoint(0); return; }
+    setUsePoint(Math.min(v, myPoints, totalBeforePoint));
+  };
+  const handlePointAll = () => {
+    const max = Math.min(myPoints, totalBeforePoint);
+    setPointInput(String(max));
+    setUsePoint(max);
+  };
 
   // 폼 초기값 (회원 정보 / 로컬스토리지)
   useEffect(() => {
@@ -161,6 +188,7 @@ export default function CheckoutPage() {
       recipientPhone: (form.sameAsOrderer ? form.phone : form.recipientPhone).replace(/-/g, ''),
       shippingAddress: `[${form.zipCode}] ${form.address} ${form.addressDetail}`.trim(),
       deliveryMemo: memo || undefined,
+      usePoint: usePoint > 0 ? usePoint : undefined,
     };
   };
 
@@ -270,6 +298,7 @@ export default function CheckoutPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 line-clamp-1">{item.name}</p>
+                    {(item as any).selectedOption && <p className="text-xs text-tea-600 mt-0.5">{(item as any).selectedOption}</p>}
                     <p className="text-xs text-gray-400 mt-0.5">{item.storeName}</p>
                     <p className="text-sm font-bold text-gray-800 mt-1">{(item.price * item.quantity).toLocaleString()}원 <span className="font-normal text-gray-400">× {item.quantity}</span></p>
                   </div>
@@ -380,10 +409,40 @@ export default function CheckoutPage() {
               {(shippingInfo.freeShippingThreshold - itemsTotal).toLocaleString()}원 더 담으면 무료배송!
             </p>
           )}
+
+          {/* 포인트 사용 */}
+          {accessToken && myPoints > 0 && (
+            <div className="border-t border-gray-100 pt-2 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-600">포인트 사용</span>
+                <span className="text-xs text-gray-400">보유: {myPoints.toLocaleString()}P</span>
+              </div>
+              <div className="flex gap-2">
+                <input type="number" value={pointInput} onChange={e => setPointInput(e.target.value)}
+                  placeholder={`${minUseAmount.toLocaleString()}P 이상`}
+                  className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-tea-500" />
+                <button type="button" onClick={handlePointApply}
+                  className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200">적용</button>
+                <button type="button" onClick={handlePointAll}
+                  className="px-3 py-1.5 bg-tea-50 text-tea-700 rounded-lg text-xs font-medium hover:bg-tea-100">전액</button>
+              </div>
+              {usePoint > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-tea-600">포인트 할인</span>
+                  <span className="text-tea-600 font-medium">-{usePoint.toLocaleString()}원</span>
+                </div>
+              )}
+              {usePoint > 0 && <p className="text-xs text-gray-400">포인트 사용 시 적립이 되지 않습니다</p>}
+            </div>
+          )}
+
           <div className="border-t border-gray-100 pt-2 flex justify-between">
             <span className="font-semibold text-gray-900">총 결제금액</span>
             <span className="text-lg font-bold text-tea-800">{total.toLocaleString()}원</span>
           </div>
+          {earnAmount > 0 && (
+            <p className="text-xs text-tea-600 text-right">구매 시 {earnAmount.toLocaleString()}P 적립 예정</p>
+          )}
         </div>
 
         {/* 지문인증 결제 (카드 + WebAuthn 등록된 경우) */}

@@ -51,7 +51,11 @@ export default api;
 
 // API 함수들
 export const authApi = {
-  register: (data: { email: string; password: string; name: string; phone?: string }) =>
+  sendPhoneCode: (phone: string) =>
+    api.post('/api/auth/phone/send', { phone }),
+  verifyPhoneCode: (phone: string, code: string) =>
+    api.post('/api/auth/phone/verify', { phone, code }),
+  register: (data: { email: string; password: string; name: string; phone: string }) =>
     api.post('/api/auth/register', data),
   login: (data: { email: string; password: string }) =>
     api.post('/api/auth/login', data),
@@ -67,8 +71,20 @@ export const authApi = {
     api.get('/api/auth/me'),
   logout: (refreshToken: string) =>
     api.post('/api/auth/logout', { refreshToken }),
+  uploadDocument: (formData: FormData) =>
+    api.post('/api/auth/upload-document', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   updateProfile: (data: object) =>
     api.put('/api/auth/profile', data),
+  updateNotificationSettings: (data: object) =>
+    api.put('/api/auth/notification-settings', data),
+  verifyPassword: (password: string) =>
+    api.post('/api/auth/verify-password', { password }),
+  changePassword: (data: { currentPassword: string; newPassword: string }) =>
+    api.post('/api/auth/change-password', data),
+  connectKakaoNotify: () =>
+    api.get('/api/auth/kakao-notify/connect'),
+  disconnectKakaoNotify: () =>
+    api.post('/api/auth/kakao-notify/disconnect'),
 };
 
 export const storeApi = {
@@ -90,6 +106,8 @@ export const storeApi = {
   deletePopup: (popupId: string) => api.delete(`/api/seller/store/popup/${popupId}`),
   updatePopupDisplayMode: (displayMode: string) =>
     api.put('/api/seller/store/popup/display-mode', { displayMode }),
+  getSettlementDetail: (period: string) =>
+    api.get('/api/seller/store/settlement-detail', { params: { period } }),
 };
 
 export const productApi = {
@@ -117,6 +135,8 @@ export const orderApi = {
   bulkStatusUpdate: (data: object) => api.post('/api/seller/orders/bulk-status', data),
   bulkShipping: (data: object) => api.post('/api/seller/orders/bulk-shipping', data),
   getSummary: () => api.get('/api/seller/orders/summary'),
+  autoTracking: (data: { orderIds: string[]; courierAccountId?: string }) => api.post('/api/seller/orders/auto-tracking', data),
+  getShippingLabels: (orderIds: string[]) => api.post('/api/seller/orders/shipping-labels', { orderIds }),
 };
 
 export const courierApi = {
@@ -151,4 +171,5 @@ export const sellerChatbotApi = {
   createFaq: (data: { question: string; answer: string }) => api.post('/api/public/seller/chatbot', data),
   updateFaq: (id: string, data: object) => api.patch(`/api/public/seller/chatbot/${id}`, data),
   deleteFaq: (id: string) => api.delete(`/api/public/seller/chatbot/${id}`),
+  updateDefaultReply: (defaultReply: string) => api.put('/api/public/seller/chatbot/default-reply', { defaultReply }),
 };

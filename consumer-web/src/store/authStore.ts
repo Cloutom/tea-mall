@@ -5,7 +5,10 @@ interface Consumer {
   id: string;
   email: string;
   name: string;
+  nickname?: string;
   phone?: string;
+  teaProfile?: string;
+  teaScores?: Record<string, number>;
 }
 
 interface AuthState {

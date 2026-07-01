@@ -5,11 +5,150 @@ import prisma from '../config/database';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { verifyBusinessNumber } from '../utils/businessVerification';
 import { AuthRequest } from '../types';
+import { sanitizeString, sanitizeEmail, sanitizePhone, validatePassword } from '../utils/sanitize';
+import { generateCode, sendSMS } from '../utils/sms';
+
+// 휴대폰 인증번호 발송
+export const sendPhoneCode = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const phone = sanitizePhone(req.body.phone);
+    if (!phone || phone.replace(/\D/g, '').length < 10) {
+      res.status(400).json({ success: false, error: '올바른 휴대폰 번호를 입력해주세요.' });
+      return;
+    }
+
+    const normalized = phone.replace(/\D/g, '');
+
+    const existingSeller = await prisma.seller.findUnique({ where: { phone: normalized } });
+    if (existingSeller) {
+      res.status(409).json({ success: false, error: '이미 가입된 휴대폰 번호입니다.' });
+      return;
+    }
+
+    const recent = await prisma.phoneVerification.findFirst({
+      where: { phone: normalized, createdAt: { gte: new Date(Date.now() - 60_000) } },
+    });
+    if (recent) {
+      res.status(429).json({ success: false, error: '1분 후에 다시 시도해주세요.' });
+      return;
+    }
+
+    await prisma.phoneVerification.deleteMany({ where: { phone: normalized } });
+
+    const code = generateCode();
+    await prisma.phoneVerification.create({
+      data: { phone: normalized, code, expiresAt: new Date(Date.now() + 3 * 60_000) },
+    });
+
+    const sent = await sendSMS(normalized, `[teabri] 인증번호 ${code}를 입력해주세요.`);
+    if (!sent) {
+      res.status(500).json({ success: false, error: 'SMS 발송에 실패했습니다.' });
+      return;
+    }
+
+    res.json({ success: true, message: '인증번호가 발송되었습니다.' });
+  } catch {
+    res.status(500).json({ success: false, error: '인증번호 발송 중 오류가 발생했습니다.' });
+  }
+};
+
+// 휴대폰 인증번호 확인
+export const verifyPhoneCode = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const phone = sanitizePhone(req.body.phone).replace(/\D/g, '');
+    const code = String(req.body.code || '').trim();
+
+    if (!phone || !code) {
+      res.status(400).json({ success: false, error: '번호와 인증번호를 입력해주세요.' });
+      return;
+    }
+
+    const record = await prisma.phoneVerification.findFirst({
+      where: { phone, verified: false },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!record) {
+      res.status(400).json({ success: false, error: '인증 요청을 먼저 해주세요.' });
+      return;
+    }
+
+    if (record.attempts >= 5) {
+      res.status(429).json({ success: false, error: '시도 횟수 초과. 인증번호를 재발송해주세요.' });
+      return;
+    }
+
+    if (record.expiresAt < new Date()) {
+      res.status(400).json({ success: false, error: '인증번호가 만료되었습니다. 재발송해주세요.' });
+      return;
+    }
+
+    if (record.code !== code) {
+      await prisma.phoneVerification.update({ where: { id: record.id }, data: { attempts: { increment: 1 } } });
+      res.status(400).json({ success: false, error: '인증번호가 일치하지 않습니다.' });
+      return;
+    }
+
+    await prisma.phoneVerification.update({ where: { id: record.id }, data: { verified: true } });
+
+    res.json({ success: true, message: '인증이 완료되었습니다.' });
+  } catch {
+    res.status(500).json({ success: false, error: '인증 확인 중 오류가 발생했습니다.' });
+  }
+};
 
 // 이메일 회원가입
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password, name, phone } = req.body;
+    const email = sanitizeEmail(req.body.email);
+    const name = sanitizeString(req.body.name).slice(0, 50);
+    const phone = sanitizePhone(req.body.phone);
+    const password = req.body.password;
+    const { businessNumber, businessName, businessOwner, businessAddress, businessType, businessCategory, birthDate, bankName, bankAccountNo, bankAccountHolder } = req.body;
+
+    if (!email) { res.status(400).json({ success: false, error: '올바른 이메일을 입력해주세요.' }); return; }
+    if (!name || name.length < 2) { res.status(400).json({ success: false, error: '이름은 2자 이상 입력해주세요.' }); return; }
+    if (!phone) { res.status(400).json({ success: false, error: '휴대폰 번호를 입력해주세요.' }); return; }
+
+    // 만 15세 이상 확인
+    if (birthDate) {
+      const bd = birthDate.replace(/\D/g, '');
+      if (bd.length === 8) {
+        const birthYear = parseInt(bd.slice(0, 4));
+        const age = new Date().getFullYear() - birthYear;
+        if (age < 15) { res.status(400).json({ success: false, error: '만 15세 이상만 판매자로 가입할 수 있습니다.' }); return; }
+      }
+    }
+
+    // 사업자 정보 검증 (입력된 경우에만)
+    if (businessName && /[<>{}()\/\\]/.test(businessName)) {
+      res.status(400).json({ success: false, error: '상호명에 특수문자를 사용할 수 없습니다.' }); return;
+    }
+    if (bankAccountHolder && businessName && bankAccountHolder !== businessName && bankAccountHolder !== businessOwner) {
+      res.status(400).json({ success: false, error: '예금주가 사업자 상호 또는 대표자명과 일치하지 않습니다.' }); return;
+    }
+    const pwErr = validatePassword(password);
+    if (pwErr) { res.status(400).json({ success: false, error: pwErr }); return; }
+
+    const normalizedPhone = phone.replace(/\D/g, '');
+
+    // TODO: SMS 서비스 활성화 시 주석 해제
+    // const phoneVerification = await prisma.phoneVerification.findFirst({
+    //   where: { phone: normalizedPhone, verified: true },
+    //   orderBy: { createdAt: 'desc' },
+    // });
+    // if (!phoneVerification) {
+    //   res.status(400).json({ success: false, error: '휴대폰 인증을 먼저 완료해주세요.' });
+    //   return;
+    // }
+
+    if (normalizedPhone) {
+      const existingPhone = await prisma.seller.findUnique({ where: { phone: normalizedPhone } });
+      if (existingPhone) {
+        res.status(409).json({ success: false, error: '이미 가입된 휴대폰 번호입니다.' });
+        return;
+      }
+    }
 
     const existing = await prisma.seller.findUnique({ where: { email } });
     if (existing) {
@@ -19,8 +158,17 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     const hashedPassword = await bcrypt.hash(password, 12);
     const seller = await prisma.seller.create({
-      data: { email, password: hashedPassword, name, phone },
+      data: {
+        email, password: hashedPassword, name, phone: normalizedPhone,
+        businessNumber: businessNumber?.replace(/-/g, '') || null, businessName: businessName || null,
+        businessOwner: businessOwner || null, businessAddress: businessAddress || null,
+        businessType: businessType || null, businessCategory: businessCategory || null,
+        birthDate: birthDate || null,
+        bankName: bankName || null, bankAccountNo: bankAccountNo || null, bankAccountHolder: bankAccountHolder || null,
+      },
     });
+
+    await prisma.phoneVerification.deleteMany({ where: { phone: normalizedPhone } });
 
     const payload = {
       sellerId: seller.id,
@@ -49,6 +197,11 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         seller: { id: seller.id, email: seller.email, name: seller.name, businessVerified: false },
       },
     });
+
+    // 관리자 알림 (비동기)
+    import('../utils/admin-notify').then(({ notifyAdminNewSeller }) => {
+      notifyAdminNewSeller(seller.name, seller.email).catch(() => {});
+    }).catch(() => {});
   } catch (error) {
     res.status(500).json({ success: false, error: '회원가입 중 오류가 발생했습니다.' });
   }
@@ -57,7 +210,12 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 // 이메일 로그인
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
+    const email = sanitizeEmail(req.body.email);
+    const password = req.body.password;
+    if (!email || typeof password !== 'string') {
+      res.status(400).json({ success: false, error: '이메일과 비밀번호를 입력해주세요.' });
+      return;
+    }
 
     const seller = await prisma.seller.findUnique({
       where: { email },
@@ -379,8 +537,11 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
       select: {
         id: true, email: true, name: true, phone: true,
         profileImageUrl: true, businessNumber: true, businessName: true,
-        businessOwner: true, businessAddress: true, businessVerified: true,
-        businessVerifiedAt: true, createdAt: true,
+        businessOwner: true, businessAddress: true, businessType: true, businessCategory: true,
+        businessVerified: true, businessVerifiedAt: true, status: true,
+        withdrawRequestedAt: true, withdrawReason: true, createdAt: true,
+        notifyOrder: true, notifyReview: true, notifySettlement: true,
+        notifyStock: true, notifySystem: true, notifyKakao: true, kakaoConnected: true,
         store: { select: { id: true, name: true, slug: true, logoUrl: true, isOpen: true } },
       },
     });
@@ -394,12 +555,11 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
 // 프로필(사업자 정보) 업데이트
 export const updateProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { businessNumber, businessName, businessOwner, businessAddress, businessType, businessCategory, name, phone } = req.body;
+    const { businessNumber, businessName, businessOwner, businessAddress, businessType, businessCategory, phone } = req.body;
     const updated = await prisma.seller.update({
       where: { id: req.seller!.id },
       data: {
-        ...(name && { name }),
-        ...(phone && { phone }),
+        ...(phone !== undefined && { phone: phone || null }),
         ...(businessNumber && { businessNumber }),
         ...(businessName && { businessName }),
         ...(businessOwner && { businessOwner }),
@@ -410,8 +570,10 @@ export const updateProfile = async (req: AuthRequest, res: Response): Promise<vo
       select: {
         id: true, email: true, name: true, phone: true,
         profileImageUrl: true, businessNumber: true, businessName: true,
-        businessOwner: true, businessAddress: true, businessVerified: true,
-        createdAt: true,
+        businessOwner: true, businessAddress: true, businessType: true, businessCategory: true,
+        businessVerified: true, createdAt: true,
+        notifyOrder: true, notifyReview: true, notifySettlement: true,
+        notifyStock: true, notifySystem: true, notifyKakao: true, kakaoConnected: true,
         store: { select: { id: true, name: true, slug: true, logoUrl: true, isOpen: true } },
       },
     });
@@ -421,7 +583,82 @@ export const updateProfile = async (req: AuthRequest, res: Response): Promise<vo
   }
 };
 
-// 로그아웃
+// 알림 설정 업데이트
+export const updateNotificationSettings = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { notifyOrder, notifyReview, notifySettlement, notifyStock, notifySystem, notifyKakao } = req.body;
+    const updated = await prisma.seller.update({
+      where: { id: req.seller!.id },
+      data: {
+        ...(notifyOrder !== undefined && { notifyOrder }),
+        ...(notifyReview !== undefined && { notifyReview }),
+        ...(notifySettlement !== undefined && { notifySettlement }),
+        ...(notifyStock !== undefined && { notifyStock }),
+        ...(notifySystem !== undefined && { notifySystem }),
+        ...(notifyKakao !== undefined && { notifyKakao }),
+      },
+      select: {
+        notifyOrder: true, notifyReview: true, notifySettlement: true,
+        notifyStock: true, notifySystem: true, notifyKakao: true, kakaoConnected: true,
+      },
+    });
+    res.json({ success: true, data: updated, message: '알림 설정이 저장되었습니다.' });
+  } catch {
+    res.status(500).json({ success: false, error: '알림 설정 저장 실패' });
+  }
+};
+
+// 현재 비밀번호 확인
+export const verifyCurrentPassword = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { password } = req.body;
+    if (!password) { res.status(400).json({ success: false, error: '비밀번호를 입력해주세요.' }); return; }
+    const seller = await prisma.seller.findUnique({ where: { id: req.seller!.id } });
+    if (!seller?.password) { res.status(400).json({ success: false, error: '비밀번호를 확인할 수 없습니다.' }); return; }
+    const valid = await bcrypt.compare(password, seller.password);
+    if (!valid) { res.status(400).json({ success: false, error: '비밀번호가 일치하지 않습니다.' }); return; }
+    res.json({ success: true, message: '비밀번호가 확인되었습니다.' });
+  } catch { res.status(500).json({ success: false, error: '비밀번호 확인 실패' }); }
+};
+
+// 판매자 비밀번호 변경
+export const changeSellerPassword = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const sellerId = req.seller!.id;
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) { res.status(400).json({ success: false, error: '현재 비밀번호와 새 비밀번호를 입력해주세요.' }); return; }
+    if (currentPassword === newPassword) { res.status(400).json({ success: false, error: '현재 비밀번호와 새 비밀번호가 동일합니다. 다른 비밀번호를 입력해주세요.' }); return; }
+    const pwErr = validatePassword(newPassword);
+    if (pwErr) { res.status(400).json({ success: false, error: pwErr }); return; }
+    const seller = await prisma.seller.findUnique({ where: { id: sellerId } });
+    if (!seller?.password) { res.status(400).json({ success: false, error: '비밀번호를 확인할 수 없습니다.' }); return; }
+    const valid = await bcrypt.compare(currentPassword, seller.password);
+    if (!valid) { res.status(400).json({ success: false, error: '현재 비밀번호가 일치하지 않습니다.' }); return; }
+    const hashed = await bcrypt.hash(newPassword, 12);
+    await prisma.seller.update({ where: { id: sellerId }, data: { password: hashed, passwordChangedAt: new Date() } });
+    res.json({ success: true, message: '비밀번호가 변경되었습니다.' });
+  } catch { res.status(500).json({ success: false, error: '비밀번호 변경 실패' }); }
+};
+
+// 판매자 탈퇴 신청
+export const requestSellerWithdraw = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const sellerId = req.seller!.id;
+    const { reason, password } = req.body;
+    if (!password) { res.status(400).json({ success: false, error: '비밀번호를 입력해주세요.' }); return; }
+    const seller = await prisma.seller.findUnique({ where: { id: sellerId } });
+    if (!seller?.password) { res.status(400).json({ success: false, error: '확인 실패' }); return; }
+    const valid = await bcrypt.compare(password, seller.password);
+    if (!valid) { res.status(400).json({ success: false, error: '비밀번호가 일치하지 않습니다.' }); return; }
+    await prisma.seller.update({
+      where: { id: sellerId },
+      data: { withdrawRequestedAt: new Date(), withdrawReason: reason || '사유 없음', status: 'WITHDRAW_REQUESTED' },
+    });
+    res.json({ success: true, message: '폐업 신청이 완료되었습니다. 관리자 확인 후 처리됩니다.' });
+    // 폐업 신청은 관리자 알림 제외
+  } catch { res.status(500).json({ success: false, error: '탈퇴 신청 실패' }); }
+};
+
 export const logout = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { refreshToken: token } = req.body;

@@ -2,12 +2,12 @@
 
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { orderApi } from '@/lib/api';
+import { orderApi, courierApi } from '@/lib/api';
 import { Order, OrderStatus } from '@/types';
 import {
   Search, ChevronLeft, ChevronRight, Package, Truck,
   CheckCircle, XCircle, RefreshCw, Clock, Loader2, AlertTriangle,
-  CheckSquare, Square, ChevronDown,
+  CheckSquare, Square, ChevronDown, Zap, Printer,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
@@ -20,6 +20,7 @@ const STATUS_CONFIG: Record<OrderStatus, { label: string; color: string; icon: a
   PREPARING:  { label: '준비중',    color: 'bg-purple-100 text-purple-700 border-purple-200',  icon: Package },
   SHIPPING:   { label: '배송중',    color: 'bg-indigo-100 text-indigo-700 border-indigo-200',  icon: Truck },
   DELIVERED:  { label: '배송 완료',  color: 'bg-green-100 text-green-700 border-green-200',   icon: CheckCircle },
+  PURCHASE_CONFIRMED: { label: '구매확정', color: 'bg-tea-100 text-tea-700 border-tea-200', icon: CheckCircle },
   CANCELLED:  { label: '취소',      color: 'bg-red-100 text-red-700 border-red-200',          icon: XCircle },
   REFUND_REQ: { label: '환불 요청',  color: 'bg-orange-100 text-orange-700 border-orange-200', icon: AlertTriangle },
   REFUNDED:   { label: '환불 완료',  color: 'bg-gray-100 text-gray-600 border-gray-200',       icon: RefreshCw },
@@ -80,6 +81,7 @@ export default function OrdersPage() {
   const [showTrackingModal, setShowTrackingModal] = useState(false);
   const [refundTarget, setRefundTarget] = useState<Order | null>(null);
   const [refundReason, setRefundReason] = useState('');
+  const [returnShippingCost, setReturnShippingCost] = useState('');
 
   // 일괄 배송 모달
   const [showBulkShipModal, setShowBulkShipModal] = useState(false);
@@ -142,14 +144,54 @@ export default function OrdersPage() {
     onError: (err: any) => toast.error(err?.response?.data?.error || '일괄 처리 실패'),
   });
 
+  const autoTrackingMutation = useMutation({
+    mutationFn: (data: { orderIds: string[]; courierAccountId?: string }) => orderApi.autoTracking(data),
+    onSuccess: (res: any) => {
+      invalidate();
+      setSelectedIds(new Set());
+      toast.success(res.data?.message || '운송장 자동 발급 완료');
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.error || '운송장 발급 실패'),
+  });
+
+  const { data: courierAccounts } = useQuery({
+    queryKey: ['courier-accounts'],
+    queryFn: () => courierApi.getAccounts().then((r: any) => r.data.data),
+  });
+
+  const handleAutoTracking = () => {
+    const eligible = selectedOrders.filter(o => ['CONFIRMED', 'PREPARING'].includes(o.status));
+    if (eligible.length === 0) { toast.error('발급 가능한 주문이 없습니다. (주문확인/준비중 상태만 가능)'); return; }
+    if (!courierAccounts?.length) { toast.error('등록된 택배사가 없습니다. 배송 관리에서 택배사를 먼저 등록해주세요.'); return; }
+    if (confirm(`${eligible.length}건에 운송장을 자동 발급하고 배송 시작 처리하시겠습니까?`)) {
+      autoTrackingMutation.mutate({ orderIds: eligible.map(o => o.id) });
+    }
+  };
+
+  const handlePrintLabels = async () => {
+    const ids = selectedIds.size > 0 ? Array.from(selectedIds) : orders.filter(o => o.trackingNumber).map(o => o.id);
+    if (ids.length === 0) { toast.error('출력할 주문을 선택해주세요.'); return; }
+    try {
+      const res = await orderApi.getShippingLabels(ids);
+      const labels = res.data.data;
+      if (!labels?.length) { toast.error('출력할 송장 데이터가 없습니다.'); return; }
+      const w = window.open('', '_blank', 'width=800,height=600');
+      if (!w) { toast.error('팝업이 차단되었습니다. 팝업을 허용해주세요.'); return; }
+      w.document.write(buildLabelHtml(labels));
+      w.document.close();
+      w.onload = () => w.print();
+    } catch { toast.error('송장 데이터 조회 실패'); }
+  };
+
   const processRefundMutation = useMutation({
-    mutationFn: ({ id, cancelReason }: { id: string; cancelReason: string }) =>
-      orderApi.processRefund(id, { cancelReason }),
+    mutationFn: ({ id, cancelReason, returnShippingCost }: { id: string; cancelReason: string; returnShippingCost?: number }) =>
+      orderApi.processRefund(id, { cancelReason, returnShippingCost }),
     onSuccess: () => {
       invalidate();
       toast.success('환불/취소 처리가 완료되었습니다.');
       setRefundTarget(null);
       setRefundReason('');
+      setReturnShippingCost('');
     },
     onError: (err: any) => toast.error(err?.response?.data?.error || '처리에 실패했습니다.'),
   });
@@ -352,6 +394,14 @@ export default function OrdersPage() {
                   {order.trackingNumber && (
                     <div className="col-span-2 text-indigo-600"><span className="text-gray-400">송장</span> {order.courier} {order.trackingNumber}</div>
                   )}
+                  {(order as any).refundType && (
+                    <div className="col-span-2">
+                      <span className="text-gray-400">반품유형</span>{' '}
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${(order as any).refundType === 'BUYER_REMORSE' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                        {(order as any).refundType === 'BUYER_REMORSE' ? '단순변심 (구매자 반품비 부담)' : '상품문제 (판매자 부담)'}
+                      </span>
+                    </div>
+                  )}
                   {(order as any).cancelReason && (
                     <div className="col-span-2 text-orange-600"><span className="text-gray-400">취소사유</span> {(order as any).cancelReason}</div>
                   )}
@@ -426,6 +476,16 @@ export default function OrdersPage() {
                   </button>
                 );
               })}
+              <button onClick={handleAutoTracking}
+                disabled={autoTrackingMutation.isPending}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-40">
+                {autoTrackingMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
+                운송장 자동발급
+              </button>
+              <button onClick={handlePrintLabels}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-gray-700 hover:bg-gray-600 text-white transition-colors">
+                <Printer size={13} /> 송장 출력
+              </button>
             </div>
             <button onClick={clearSelection}
               className="text-gray-400 hover:text-white text-sm shrink-0 transition-colors">
@@ -517,21 +577,60 @@ export default function OrdersPage() {
       )}
 
       {/* 환불/취소 승인 모달 */}
-      {refundTarget && (
+      {refundTarget && (() => {
+        const rt = refundTarget as any;
+        const isBuyerRemorse = rt.refundType === 'BUYER_REMORSE';
+        const isProductDefect = rt.refundType === 'PRODUCT_DEFECT';
+        const shipCost = Number(returnShippingCost) || 0;
+        const estimatedRefund = isBuyerRemorse
+          ? Math.max(0, refundTarget.finalAmount - shipCost)
+          : refundTarget.finalAmount;
+
+        return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
             <h3 className="font-bold text-gray-900 text-lg mb-1 flex items-center gap-2">
               <RefreshCw size={20} className="text-orange-500" /> 환불/취소 승인
             </h3>
             <p className="text-sm text-gray-500 mb-4">승인 시 Toss 결제가 자동으로 취소되고 카드사에 환불됩니다.</p>
+
             <div className="bg-orange-50 rounded-xl p-3 mb-4 text-sm">
               <p className="font-medium text-gray-900">{refundTarget.orderNumber}</p>
-              <p className="text-gray-600 mt-1">{refundTarget.finalAmount.toLocaleString()}원</p>
-              {(refundTarget as any).cancelReason && (
-                <p className="text-orange-700 mt-1 text-xs">고객 사유: {(refundTarget as any).cancelReason}</p>
+              <p className="text-gray-600 mt-1">결제금액: {refundTarget.finalAmount.toLocaleString()}원</p>
+              {rt.refundType && (
+                <div className="flex items-center gap-2 mt-2">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isBuyerRemorse ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                    {isBuyerRemorse ? '단순변심' : '상품문제'}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    반품비: {isBuyerRemorse ? '구매자 부담' : '판매자 부담'}
+                  </span>
+                </div>
+              )}
+              {rt.cancelReason && (
+                <p className="text-orange-700 mt-2 text-xs">고객 사유: {rt.cancelReason}</p>
               )}
             </div>
+
             <div className="space-y-3">
+              {isBuyerRemorse && (
+                <div>
+                  <label className="label-base">반품 배송비 (구매자 부담)</label>
+                  <input type="number" value={returnShippingCost}
+                    onChange={(e) => setReturnShippingCost(e.target.value)}
+                    placeholder="예: 3000" className="input-base" />
+                  {shipCost > 0 && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      환불 예상 금액: {estimatedRefund.toLocaleString()}원 (결제 {refundTarget.finalAmount.toLocaleString()} - 반품비 {shipCost.toLocaleString()})
+                    </p>
+                  )}
+                </div>
+              )}
+              {isProductDefect && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-2.5 text-xs text-red-700">
+                  상품 문제로 인한 반품입니다. 반품 배송비는 판매자 부담이며, 전액 환불됩니다.
+                </div>
+              )}
               <div>
                 <label className="label-base">처리 사유 (내부 메모)</label>
                 <textarea value={refundReason} onChange={(e) => setRefundReason(e.target.value)}
@@ -540,17 +639,88 @@ export default function OrdersPage() {
               </div>
             </div>
             <div className="flex gap-3 mt-5">
-              <button onClick={() => { setRefundTarget(null); setRefundReason(''); }} className="btn-secondary flex-1">취소</button>
-              <button onClick={() => { if (!refundReason.trim()) { toast.error('처리 사유를 입력해주세요.'); return; } processRefundMutation.mutate({ id: refundTarget.id, cancelReason: refundReason }); }}
+              <button onClick={() => { setRefundTarget(null); setRefundReason(''); setReturnShippingCost(''); }} className="btn-secondary flex-1">취소</button>
+              <button onClick={() => {
+                if (!refundReason.trim()) { toast.error('처리 사유를 입력해주세요.'); return; }
+                processRefundMutation.mutate({
+                  id: refundTarget.id,
+                  cancelReason: refundReason,
+                  returnShippingCost: shipCost || undefined,
+                });
+              }}
                 disabled={processRefundMutation.isPending}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-orange-500 text-white rounded-xl hover:bg-orange-600 transition-colors disabled:opacity-50 text-sm font-medium">
                 {processRefundMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                환불 승인
+                {estimatedRefund.toLocaleString()}원 환불
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
+}
+
+function buildLabelHtml(labels: any[]): string {
+  const labelCards = labels.map((l: any) => `
+    <div class="label">
+      <div class="header">
+        <div class="courier">${l.courier || '택배'}</div>
+        <div class="tracking">${l.trackingNumber || '미발급'}</div>
+      </div>
+      <div class="section">
+        <div class="row">
+          <div class="col">
+            <div class="title">보내는 분</div>
+            <div class="name">${l.sender.name}</div>
+            <div class="info">${l.sender.phone}</div>
+            <div class="info">${l.sender.zipCode ? '[' + l.sender.zipCode + '] ' : ''}${l.sender.address}</div>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div class="row">
+          <div class="col">
+            <div class="title">받는 분</div>
+            <div class="name recv">${l.receiver.name}</div>
+            <div class="info">${l.receiver.phone}</div>
+            <div class="info">${l.receiver.zipCode ? '[' + l.receiver.zipCode + '] ' : ''}${l.receiver.address}</div>
+            ${l.memo ? '<div class="memo">배송메모: ' + l.memo + '</div>' : ''}
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div class="row">
+          <div class="col">
+            <div class="title">상품정보</div>
+            ${l.items.map((item: any) => '<div class="info">' + item.name + ' x ' + item.qty + '</div>').join('')}
+          </div>
+          <div class="amount">${l.totalAmount.toLocaleString()}원</div>
+        </div>
+        <div class="order-num">주문번호: ${l.orderNumber}</div>
+      </div>
+    </div>
+  `).join('');
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>송장 출력</title>
+<style>
+  @page { size: 100mm 150mm; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Malgun Gothic', sans-serif; }
+  .label { width: 100mm; height: 150mm; padding: 4mm; page-break-after: always; border: 1px solid #ccc; }
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 3mm 2mm; border: 2px solid #000; margin-bottom: 3mm; }
+  .courier { font-size: 16pt; font-weight: bold; }
+  .tracking { font-size: 12pt; font-weight: bold; letter-spacing: 1px; }
+  .section { border: 1px solid #999; }
+  .row { padding: 2.5mm 3mm; display: flex; justify-content: space-between; align-items: flex-start; }
+  .col { flex: 1; }
+  .title { font-size: 7pt; color: #666; margin-bottom: 1mm; text-transform: uppercase; letter-spacing: 0.5px; }
+  .name { font-size: 11pt; font-weight: bold; margin-bottom: 1mm; }
+  .recv { font-size: 13pt; }
+  .info { font-size: 8.5pt; color: #333; line-height: 1.5; }
+  .memo { font-size: 8pt; color: #c00; margin-top: 1.5mm; font-weight: 500; }
+  .divider { border-top: 1px dashed #aaa; }
+  .amount { font-size: 11pt; font-weight: bold; white-space: nowrap; padding-top: 4mm; }
+  .order-num { font-size: 7pt; color: #888; text-align: right; padding: 1.5mm 3mm; border-top: 1px solid #ddd; }
+  @media print { .label { border: none; } }
+</style></head><body>${labelCards}</body></html>`;
 }

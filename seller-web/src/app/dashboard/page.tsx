@@ -28,6 +28,7 @@ const STATUS_BADGE: Record<OrderStatus, { label: string; color: string }> = {
   PREPARING: { label: '준비중',   color: 'bg-purple-100 text-purple-700' },
   SHIPPING:  { label: '배송중',   color: 'bg-indigo-100 text-indigo-700' },
   DELIVERED: { label: '배송 완료', color: 'bg-green-100 text-green-700' },
+  PURCHASE_CONFIRMED: { label: '구매확정', color: 'bg-tea-100 text-tea-700' },
   CANCELLED: { label: '취소',    color: 'bg-red-100 text-red-700' },
   REFUND_REQ:{ label: '환불 요청', color: 'bg-orange-100 text-orange-700' },
   REFUNDED:  { label: '환불 완료', color: 'bg-gray-100 text-gray-600' },
@@ -141,16 +142,18 @@ export default function DashboardPage() {
       </div>
 
       {/* 주문 처리 알림 배너 */}
-      {(orderSummary?.pending || 0) > 0 && (
+      {((orderSummary?.confirmed || 0) + (orderSummary?.pending || 0)) > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3">
           <AlertCircle size={20} className="text-amber-600 shrink-0" />
           <div className="flex-1">
             <span className="font-medium text-amber-800">
-              처리 대기 주문 {orderSummary.pending}건
+              처리 대기 주문 {orderSummary.confirmed}건
             </span>
-            <span className="text-amber-700 text-sm ml-2">
-              + 확인 중 {orderSummary.confirmed}건
-            </span>
+            {(orderSummary.shipping || 0) > 0 && (
+              <span className="text-amber-700 text-sm ml-2">
+                + 배송중 {orderSummary.shipping}건
+              </span>
+            )}
           </div>
           <Link href="/dashboard/orders?status=PENDING" className="text-sm font-medium text-amber-700 hover:underline flex items-center gap-1">
             확인하기 <ArrowRight size={14} />

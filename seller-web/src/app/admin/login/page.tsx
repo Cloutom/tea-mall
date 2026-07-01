@@ -5,8 +5,6 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { Shield } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
-
 export default function AdminLoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -19,7 +17,7 @@ export default function AdminLoginPage() {
     setError('');
     setLoading(true);
     try {
-      const { data } = await axios.post(`${API_URL}/api/admin/login`, { email, password });
+      const { data } = await axios.post(`/api/admin/login`, { email, password });
       if (data.success) {
         localStorage.setItem('admin-token', data.data.token);
         localStorage.setItem('admin-info', JSON.stringify(data.data.admin));

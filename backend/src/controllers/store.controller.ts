@@ -64,6 +64,7 @@ export const updateStore = async (req: AuthRequest, res: Response): Promise<void
       name, description, shippingPolicy, returnPolicy,
       minOrderAmount, isOpen, openMessage, closedMessage,
       instagramUrl, naverBlogUrl, youtubeUrl,
+      vacationStartAt, vacationEndAt, pageSections,
     } = req.body;
 
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
@@ -81,8 +82,11 @@ export const updateStore = async (req: AuthRequest, res: Response): Promise<void
         shippingPolicy, returnPolicy,
         minOrderAmount: minOrderAmount !== undefined && minOrderAmount !== '' ? parseFloat(minOrderAmount) : null,
         isOpen: isOpen === 'true' || isOpen === true,
-        openMessage, closedMessage,
+        openMessage: openMessage || null, closedMessage: closedMessage || null,
+        vacationStartAt: vacationStartAt ? new Date(vacationStartAt + 'T00:00:00+09:00') : null,
+        vacationEndAt: vacationEndAt ? new Date(vacationEndAt + 'T23:59:59+09:00') : null,
         instagramUrl, naverBlogUrl, youtubeUrl,
+        ...(pageSections !== undefined && { pageSections: typeof pageSections === 'string' ? JSON.parse(pageSections) : pageSections }),
       },
     });
 

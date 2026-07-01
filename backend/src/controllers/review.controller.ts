@@ -9,11 +9,17 @@ export const getProductReviews = async (req: Request, res: Response): Promise<vo
     const { productId } = req.params;
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
+    const sort = req.query.sort as string || 'latest';
+
+    const orderBy =
+      sort === 'rating_high' ? [{ rating: 'desc' as const }, { createdAt: 'desc' as const }] :
+      sort === 'rating_low' ? [{ rating: 'asc' as const }, { createdAt: 'desc' as const }] :
+      [{ createdAt: 'desc' as const }];
 
     const [reviews, total] = await Promise.all([
       prisma.review.findMany({
         where: { productId, isVisible: true },
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
         select: {
@@ -65,24 +71,25 @@ export const createReview = async (req: ConsumerAuthRequest, res: Response): Pro
       res.status(400).json({ success: false, error: '리뷰 내용은 10자 이상 작성해주세요.' }); return;
     }
 
-    // 구매 이력 자동 조회 (orderId 명시 안해도 됨)
+    // 구매확정된 주문만 리뷰 작성 가능
     const targetOrderId = orderId && orderId !== 'skip' ? orderId : null;
     const order = await prisma.order.findFirst({
       where: {
         consumerId,
-        status: { in: [OrderStatus.DELIVERED, OrderStatus.SHIPPING, OrderStatus.CONFIRMED] },
+        status: 'PURCHASE_CONFIRMED',
         items: { some: { productId } },
         ...(targetOrderId ? { id: targetOrderId } : {}),
       },
+      include: { items: true },
     });
     if (!order) {
-      res.status(400).json({ success: false, error: '해당 상품을 구매한 내역이 없습니다.' }); return;
+      res.status(400).json({ success: false, error: '구매확정 후에만 리뷰를 작성할 수 있습니다.' }); return;
     }
 
-    // 이미 작성한 리뷰 확인
-    const existing = await prisma.review.findFirst({ where: { orderId: order.id, productId, consumerId } });
+    // 한 주문당 하나의 리뷰만 허용
+    const existing = await prisma.review.findFirst({ where: { orderId: order.id, consumerId } });
     if (existing) {
-      res.status(400).json({ success: false, error: '이미 리뷰를 작성하셨습니다.' }); return;
+      res.status(400).json({ success: false, error: '이 주문에 대해 이미 리뷰를 작성하셨습니다.' }); return;
     }
 
     const consumer = await prisma.consumer.findUnique({ where: { id: consumerId }, select: { name: true } });
@@ -100,7 +107,30 @@ export const createReview = async (req: ConsumerAuthRequest, res: Response): Pro
       },
     });
 
-    res.json({ success: true, data: review });
+    // 리뷰 포인트 지급 (관리자 설정 기반)
+    const pointSetting = await prisma.pointSetting.findFirst();
+    const hasPhoto = images && images.length > 0;
+    let reviewPoints = 0;
+
+    if (pointSetting) {
+      if (pointSetting.reviewPointType === 'percent' && pointSetting.reviewPointRate > 0) {
+        const orderItem = (order as any).items?.find((i: any) => i.productId === productId);
+        const itemAmount = orderItem ? orderItem.totalPrice : order.finalAmount;
+        reviewPoints = Math.round(itemAmount * pointSetting.reviewPointRate / 100);
+      } else {
+        reviewPoints = pointSetting.reviewPointFixed || 0;
+      }
+      if (hasPhoto) reviewPoints += (pointSetting.reviewPhotoBonus || 0);
+    }
+
+    if (reviewPoints > 0) {
+      const reason = hasPhoto ? '리뷰 작성 포인트 (사진 포함)' : '리뷰 작성 포인트';
+      await prisma.pointHistory.create({
+        data: { consumerId, amount: reviewPoints, type: 'EARN', reason, orderId: order.id },
+      });
+    }
+
+    res.json({ success: true, data: review, reviewPoints });
   } catch {
     res.status(500).json({ success: false, error: '리뷰 작성 중 오류가 발생했습니다.' });
   }

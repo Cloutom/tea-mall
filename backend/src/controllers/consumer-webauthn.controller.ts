@@ -109,7 +109,7 @@ export const payWithBillingKey = async (req: AuthReq, res: Response): Promise<vo
     await Promise.all(order.items?.map?.((item: any) =>
       prisma.product.updateMany({
         where: { id: item.productId },
-        data: { stock: { decrement: item.quantity }, totalSales: { increment: item.quantity } },
+        data: { stock: { decrement: item.quantity }, totalSales: { increment: item.quantity }, totalRevenue: { increment: item.unitPrice * item.quantity } },
       })
     ) || []);
 

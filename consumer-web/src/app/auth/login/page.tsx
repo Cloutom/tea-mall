@@ -18,22 +18,45 @@ function LoginContent() {
   const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState(socialError === 'social_failed' ? '소셜 로그인에 실패했습니다. 다시 시도해주세요.' : '');
   const [loading, setLoading] = useState(false);
+  const [showReactivate, setShowReactivate] = useState(false);
+  const [reactivating, setReactivating] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.email || !form.password) { setError('이메일과 비밀번호를 입력해주세요.'); return; }
     setLoading(true);
     setError('');
+    setShowReactivate(false);
     try {
       const res = await consumerAuthApi.login({ email: form.email, password: form.password });
       const { accessToken, consumer } = res.data.data;
       setAuth(accessToken, consumer);
       router.push(decodeURIComponent(redirect));
     } catch (err: any) {
-      setError(err?.response?.data?.error || '로그인에 실패했습니다.');
+      const data = err?.response?.data;
+      if (data?.canReactivate) {
+        setShowReactivate(true);
+        setError(`탈퇴 신청된 계정입니다. ${new Date(data.withdrawScheduledAt).toLocaleDateString('ko-KR')}까지 복구 가능합니다.`);
+      } else {
+        setError(data?.error || '로그인에 실패했습니다.');
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleReactivate = async () => {
+    setReactivating(true);
+    try {
+      await consumerAuthApi.reactivateAccount({ email: form.email, password: form.password });
+      setError('');
+      setShowReactivate(false);
+      const res = await consumerAuthApi.login({ email: form.email, password: form.password });
+      setAuth(res.data.data.accessToken, res.data.data.consumer);
+      router.push('/');
+    } catch (err: any) {
+      setError(err?.response?.data?.error || '복구 실패');
+    } finally { setReactivating(false); }
   };
 
   const handleSocialLogin = (provider: 'kakao' | 'google' | 'naver') => {
@@ -54,7 +77,15 @@ function LoginContent() {
           <h2 className="text-xl font-bold text-gray-800 mb-6">로그인</h2>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-lg text-sm">{error}</div>
+            <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-lg text-sm">
+              {error}
+              {showReactivate && (
+                <button onClick={handleReactivate} disabled={reactivating}
+                  className="mt-2 w-full py-2 bg-tea-600 text-white rounded-lg text-sm font-medium hover:bg-tea-700 disabled:opacity-50">
+                  {reactivating ? '복구 중...' : '계정 복구하기'}
+                </button>
+              )}
+            </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">

@@ -24,13 +24,29 @@ const BODY_OPTIONS = [
   { value: 'full',   label: '진함',  desc: '묵직하고 풍부함' },
 ];
 const AROMA_OPTIONS = ['꽃향', '과일향', '구수한향', '풀향', '스모키', '달콤한향', '민트/청량', '흙향', '나무향', '허브향'];
+const AROMA_PROFILE_OPTIONS = [
+  { code: 'FLA', label: '꽃향' }, { code: 'FRU', label: '과일향' },
+  { code: 'CIT', label: '시트러스' }, { code: 'SWE', label: '달콤' },
+  { code: 'HON', label: '꿀향' }, { code: 'CRE', label: '크리미' },
+  { code: 'VEG', label: '풀향' }, { code: 'MAR', label: '해풍' },
+  { code: 'MIN', label: '광물' }, { code: 'ROA', label: '볶은향' },
+  { code: 'MAL', label: '맥아' }, { code: 'WOO', label: '나무향' },
+  { code: 'EAR', label: '흙향' }, { code: 'SPI', label: '향신료' },
+  { code: 'SMO', label: '훈연' }, { code: 'COM', label: '복합' },
+];
 const RECOMMENDED_TIMES = ['이른 아침', '오전 티타임', '점심 후', '오후 티타임', '저녁', '취침 전', '명상/요가', '독서'];
 const FLAVOR_LABELS = [
-  { key: 'flavorBitter',     label: '쓴맛',    color: 'bg-gray-600' },
-  { key: 'flavorSweet',      label: '단맛',    color: 'bg-amber-400' },
-  { key: 'flavorAstringent', label: '떫은맛',  color: 'bg-green-600' },
-  { key: 'flavorSavory',     label: '구수한맛', color: 'bg-yellow-600' },
-  { key: 'flavorFloral',     label: '꽃향미',  color: 'bg-pink-400' },
+  { key: 'flavorBitter',     label: '쓴맛' },
+  { key: 'flavorSweet',      label: '단맛' },
+  { key: 'flavorAstringent', label: '떫은맛' },
+  { key: 'flavorSavory',     label: '구수한맛' },
+  { key: 'flavorFloral',     label: '꽃향' },
+  { key: 'flavorFruity',     label: '과일향' },
+  { key: 'flavorNutty',      label: '고소함' },
+  { key: 'flavorSmoky',      label: '훈연향' },
+  { key: 'flavorEarthy',     label: '흙/대지향' },
+  { key: 'flavorFresh',      label: '청량감' },
+  { key: 'flavorCreamy',     label: '크리미' },
 ];
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
@@ -46,14 +62,26 @@ export default function EditProductPage() {
   const [newImagePreviews, setNewImagePreviews] = useState<string[]>([]);
   const [existingImages, setExistingImages] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
+  const [aromaProfile, setAromaProfile] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [selectedAromas, setSelectedAromas] = useState<string[]>([]);
   const [selectedTimes, setSelectedTimes] = useState<string[]>([]);
-  const [flavors, setFlavors] = useState({ flavorBitter: 0, flavorSweet: 0, flavorAstringent: 0, flavorSavory: 0, flavorFloral: 0 });
+  const [flavors, setFlavors] = useState({ flavorBitter: 0, flavorSweet: 0, flavorAstringent: 0, flavorSavory: 0, flavorFloral: 0, flavorFruity: 0, flavorNutty: 0, flavorSmoky: 0, flavorEarthy: 0, flavorFresh: 0, flavorCreamy: 0 });
   const [initialized, setInitialized] = useState(false);
   const [showCatForm, setShowCatForm] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [newCatIcon, setNewCatIcon] = useState('');
+
+  type OptionValue = { label: string; priceAdd: number; soldOut: boolean };
+  type OptionGroup = { name: string; values: OptionValue[] };
+  const [productOptionGroups, setProductOptionGroups] = useState<OptionGroup[]>([]);
+  const addOptionGroup = () => setProductOptionGroups(prev => [...prev, { name: '', values: [{ label: '', priceAdd: 0, soldOut: false }] }]);
+  const removeOptionGroup = (i: number) => setProductOptionGroups(prev => prev.filter((_, idx) => idx !== i));
+  const updateOptionGroupName = (i: number, name: string) => setProductOptionGroups(prev => prev.map((g, idx) => idx === i ? { ...g, name } : g));
+  const addOptionValue = (gi: number) => setProductOptionGroups(prev => prev.map((g, idx) => idx === gi ? { ...g, values: [...g.values, { label: '', priceAdd: 0, soldOut: false }] } : g));
+  const removeOptionValue = (gi: number, vi: number) => setProductOptionGroups(prev => prev.map((g, idx) => idx === gi ? { ...g, values: g.values.filter((_, vidx) => vidx !== vi) } : g));
+  const updateOptionValue = (gi: number, vi: number, field: keyof OptionValue, value: any) =>
+    setProductOptionGroups(prev => prev.map((g, idx) => idx === gi ? { ...g, values: g.values.map((v, vidx) => vidx === vi ? { ...v, [field]: value } : v) } : g));
   const thumbnailRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<HTMLInputElement>(null);
 
@@ -89,6 +117,7 @@ export default function EditProductPage() {
       harvestSeason: '', processingMethod: '', liquidColor: '', body: '',
       isActive: 'true', isSignature: 'false',
       newBadgeDays: '0',
+      wholesaleSupplier: '', wholesalePrice: '', wholesaleShipping: '', marketShippingCost: '',
     },
   });
 
@@ -135,10 +164,15 @@ export default function EditProductPage() {
           isActive: p.isActive ? 'true' : 'false',
           isSignature: p.isSignature ? 'true' : 'false',
           newBadgeDays: String(p.newBadgeDays ?? 0),
+          wholesaleSupplier: p.wholesaleSupplier || '',
+          wholesalePrice: p.wholesalePrice ? String(p.wholesalePrice) : '',
+          wholesaleShipping: p.wholesaleShipping ? String(p.wholesaleShipping) : '',
+          marketShippingCost: p.marketShippingCost ? String(p.marketShippingCost) : '',
         });
         setThumbnailPreview(p.thumbnail ? imgUrl(p.thumbnail) : '');
         setExistingImages(p.images || []);
         setTags(p.tags || []);
+        setAromaProfile(p.aromaProfile || []);
         setSelectedAromas(p.aroma ? p.aroma.split(',').map((a: string) => a.trim()).filter(Boolean) : []);
         setSelectedTimes(p.recommendedTime ? p.recommendedTime.split(',').map((t: string) => t.trim()).filter(Boolean) : []);
         setFlavors({
@@ -147,7 +181,14 @@ export default function EditProductPage() {
           flavorAstringent: p.flavorAstringent ?? 0,
           flavorSavory: p.flavorSavory ?? 0,
           flavorFloral: p.flavorFloral ?? 0,
+          flavorFruity: p.flavorFruity ?? 0,
+          flavorNutty: p.flavorNutty ?? 0,
+          flavorSmoky: p.flavorSmoky ?? 0,
+          flavorEarthy: p.flavorEarthy ?? 0,
+          flavorFresh: p.flavorFresh ?? 0,
+          flavorCreamy: p.flavorCreamy ?? 0,
         });
+        if (p.options && Array.isArray(p.options)) setProductOptionGroups(p.options as OptionGroup[]);
         setInitialized(true);
       }
       return p;
@@ -184,6 +225,8 @@ export default function EditProductPage() {
     newImages.forEach((img) => formData.append('images', img));
     existingImages.forEach((url) => formData.append('existingImages', url));
     tags.forEach((tag) => formData.append('tags', tag));
+    if (aromaProfile.length > 0) formData.append('aromaProfile', aromaProfile.join(','));
+    if (productOptionGroups.length > 0) formData.append('options', JSON.stringify(productOptionGroups));
     updateMutation.mutate(formData);
   };
 
@@ -511,7 +554,7 @@ export default function EditProductPage() {
                   className="flex-1 accent-tea-600 h-2" />
                 <div className="flex gap-0.5 shrink-0">
                   {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className={clsx('w-3 h-3 rounded-sm', i < (flavors as any)[f.key] ? f.color : 'bg-gray-100')} />
+                    <div key={i} className={clsx('w-3 h-3 rounded-sm', i < (flavors as any)[f.key] ? 'bg-tea-500' : 'bg-gray-100')} />
                   ))}
                 </div>
                 <span className="text-xs text-gray-500 w-4 shrink-0">{(flavors as any)[f.key]}</span>
@@ -566,6 +609,35 @@ export default function EditProductPage() {
           </div>
         </section>
 
+        {/* ── 향미 프로필 ── */}
+        <section className="card space-y-3">
+          <h2 className="font-semibold text-gray-900 text-sm sm:text-base flex items-center gap-2">
+            <Leaf size={16} className="text-gray-400" /> 향미 프로필
+            <span className="text-xs font-normal text-gray-400">(소비자 취향 매칭용)</span>
+          </h2>
+          <p className="text-xs text-gray-400">필수 1개, 최대 3개</p>
+          <div className="grid grid-cols-4 gap-2">
+            {AROMA_PROFILE_OPTIONS.map((opt) => {
+              const selected = aromaProfile.includes(opt.code);
+              const maxReached = aromaProfile.length >= 3 && !selected;
+              return (
+                <button key={opt.code} type="button" disabled={maxReached}
+                  onClick={() => setAromaProfile((prev) => selected ? prev.filter((c) => c !== opt.code) : prev.length < 3 ? [...prev, opt.code] : prev)}
+                  className={clsx('flex flex-col items-center gap-1 p-2 rounded-xl border text-xs transition-all',
+                    selected ? 'border-tea-500 bg-tea-50 text-tea-700 font-semibold'
+                    : maxReached ? 'border-gray-100 text-gray-300 cursor-not-allowed'
+                    : 'border-gray-200 text-gray-500 hover:border-tea-300')}>
+                  <span className="text-[10px] font-bold text-gray-400">{opt.code}</span>
+                  <span>{opt.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className={clsx('text-xs', aromaProfile.length === 0 ? 'text-red-500' : 'text-tea-600')}>
+            {aromaProfile.length === 0 ? '최소 1개를 선택해주세요' : `선택: ${aromaProfile.map((c) => AROMA_PROFILE_OPTIONS.find((o) => o.code === c)?.label).join(', ')} (${aromaProfile.length}/3)`}
+          </p>
+        </section>
+
         {/* ── 태그 ── */}
         <section className="card space-y-3">
           <h2 className="font-semibold text-gray-900 text-sm sm:text-base">태그</h2>
@@ -612,6 +684,88 @@ export default function EditProductPage() {
                   {o.label}
                 </label>
               ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── 판매 옵션 (선택) ── */}
+        <section className="card space-y-4">
+          <div>
+            <h2 className="font-semibold text-gray-900 text-sm sm:text-base flex items-center gap-2">
+              <Settings2 size={16} className="text-tea-500" /> 판매 옵션
+              <span className="text-xs font-normal text-gray-400">(선택) — 구매 시 소비자가 고르는 항목</span>
+            </h2>
+            <p className="text-xs text-gray-400 mt-1">예: 용량(100g / 200g), 구성(단품 / 세트) 등</p>
+          </div>
+          {productOptionGroups.map((group, gi) => (
+            <div key={gi} className="border border-gray-200 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <input value={group.name} onChange={e => updateOptionGroupName(gi, e.target.value)}
+                  placeholder="옵션명 (예: 용량, 수량)" className="input-base flex-1" />
+                <button type="button" onClick={() => removeOptionGroup(gi)}
+                  className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg shrink-0"><X size={16} /></button>
+              </div>
+              <div className="space-y-2">
+                {group.values.map((val, vi) => (
+                  <div key={vi} className="flex items-center gap-2">
+                    <input value={val.label} onChange={e => updateOptionValue(gi, vi, 'label', e.target.value)}
+                      placeholder="옵션값 (예: 100g)" className="input-base flex-1 text-sm" />
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="text-xs text-gray-400">+</span>
+                      <input type="number" value={val.priceAdd} min={0}
+                        onChange={e => updateOptionValue(gi, vi, 'priceAdd', parseInt(e.target.value) || 0)}
+                        className="input-base w-24 text-sm" placeholder="0" />
+                      <span className="text-xs text-gray-400 shrink-0">원</span>
+                    </div>
+                    <label className="flex items-center gap-1 text-xs text-gray-500 shrink-0">
+                      <input type="checkbox" checked={val.soldOut}
+                        onChange={e => updateOptionValue(gi, vi, 'soldOut', e.target.checked)} className="rounded" />
+                      품절
+                    </label>
+                    {group.values.length > 1 && (
+                      <button type="button" onClick={() => removeOptionValue(gi, vi)}
+                        className="p-1 text-gray-400 hover:text-red-400 shrink-0"><X size={13} /></button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={() => addOptionValue(gi)}
+                className="text-xs text-tea-600 hover:underline flex items-center gap-1">
+                <Plus size={12} /> 옵션값 추가
+              </button>
+            </div>
+          ))}
+          <button type="button" onClick={addOptionGroup}
+            className="w-full py-2.5 border-2 border-dashed border-gray-200 rounded-xl text-sm text-gray-500 hover:border-tea-400 hover:text-tea-600 transition-colors flex items-center justify-center gap-2">
+            <Plus size={15} /> 옵션 그룹 추가
+          </button>
+        </section>
+
+        {/* ── 정산 정보 (선택) ── */}
+        <section className="card space-y-4">
+          <div>
+            <h2 className="font-semibold text-gray-900 text-sm sm:text-base flex items-center gap-2">
+              <Settings2 size={16} className="text-tea-500" /> 정산 정보
+              <span className="text-xs font-normal text-gray-400">(선택)</span>
+            </h2>
+            <p className="text-xs text-gray-400 mt-1">입력하면 엑셀 다운로드 시 도매 원가, 마진 등이 자동 계산됩니다.</p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+            <div className="col-span-2">
+              <label className="label-base">공급처</label>
+              <input {...register('wholesaleSupplier')} placeholder="도매 공급처명" className="input-base" />
+            </div>
+            <div>
+              <label className="label-base">도매공급가 <span className="text-gray-400 font-normal text-xs">(원)</span></label>
+              <input type="number" {...register('wholesalePrice')} placeholder="0" className="input-base" />
+            </div>
+            <div>
+              <label className="label-base">도매배송비 <span className="text-gray-400 font-normal text-xs">(원)</span></label>
+              <input type="number" {...register('wholesaleShipping')} placeholder="0" className="input-base" />
+            </div>
+            <div className="col-span-2 sm:col-span-4">
+              <label className="label-base">마켓택배비 <span className="text-gray-400 font-normal text-xs">(원)</span></label>
+              <input type="number" {...register('marketShippingCost')} placeholder="소비자에게 보내는 택배비" className="input-base" />
             </div>
           </div>
         </section>
